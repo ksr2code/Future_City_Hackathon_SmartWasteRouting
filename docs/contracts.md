@@ -68,11 +68,50 @@ Policy: invalid rows are reported, never silently dropped or coerced; a dataset
 with errors yields `dataset=None`-style empty result plus the full error list.
 Raw files are read-only.
 
-## 2. Forecast output (src/forecasting) — TBD at M5
+## 2. Forecast output (src/forecasting) — v1 draft, agreed for M5
 
-Shape (draft, not agreed): per `(location_id, material_type)`:
-predicted fill/overflow risk at a horizon date with prediction-time-only features,
-plus baseline comparison. Blocked on [open question §13.1] (reading semantics).
+### 2.1 Target definition [grounded in data; constrained by open question §13.1]
+
+Operational question: *what will the fill level of a series
+`(location_id, material_type)` be at its next observed reading after the
+prediction date?* The dataset records fill only at reading dates
+[observed — median gap 28 d], so evaluation happens at observed readings.
+At inference/demo time the horizon is a configurable number of days
+**[demo assumption — not from brief]**; at evaluation time
+`target_date` = next observed reading date [observed].
+
+### 2.2 `ForecastRecord`
+
+| field | type | status |
+|---|---|---|
+| `location_id`, `material_type` | key | [observed] |
+| `as_of_date` | `date` | features may use only readings with `date <= as_of_date` (normative) |
+| `target_date` | `date` | next observed reading (eval) or `as_of_date + horizon_days` (inference) |
+| `predicted_fill_pct` | `float` in `[0,100]` | clipped; percent units |
+| `predicted_state` | `"normal" \| "full" \| "overfull"` | `full` := numeric 100 [observed], `overfull` := token [observed]; states stay distinct (§1.1 non-decision) |
+| `method` | `"persistence" \| "rate"` (M5) | more at M6 |
+| `horizon_days` | `int` | days as_of → target |
+
+### 2.3 Baselines (M5 — deterministic, no ML)
+
+- **persistence**: numeric = last observed numeric fill ≤ as_of (if the last
+  reading was `overfull`, predicted_state = `overfull` and numeric falls back
+  to the last numeric fill).
+- **rate**: last numeric fill + per-series median daily rate over numeric
+  consecutive pairs × `horizon_days`, clipped to `[0,100]`.
+
+### 2.4 Evaluation protocol (normative for M5/M6)
+
+- **Chronological split only** (never random row splits): train `< 2026-05-01`,
+  validation `2026-05-01..2026-07-31`, test `>= 2026-08-01`
+  [protocol choice for the prototype, not a brief fact].
+- Numeric metrics (MAE/RMSE in percentage points) computed **only where the
+  observed truth is numeric**; rows whose truth is `overfull` are excluded from
+  numeric metrics and covered by state metrics — never coerced.
+- State metrics: confusion counts for `full-or-overfull` vs rest at a
+  configurable threshold, default 80 % **[demo assumption]**.
+- Leakage: no target reading may enter any feature; prediction-time features
+  use only data available at `as_of_date`.
 
 ## 3. Collection candidates (src/collection) — TBD at M7
 

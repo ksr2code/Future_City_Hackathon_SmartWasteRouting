@@ -19,3 +19,4 @@ which stays immutable under `data/raw/`.
 | `synthetic_accumulation.csv` | hand-computable fill deltas/rates, overfull break, single-reading and flat-full series |
 | `synthetic_seasonality.csv` | dates engineered around BW public holidays vs ordinary days, several months/weekdays |
 | `synthetic_grouping.csv` | two well-separated behavioural groups + insufficient-history series |
+| `synthetic_forecast.csv` | M5 hand-computable eval cases: overfull-break/rate pairs, overfull-only and single-reading series |
