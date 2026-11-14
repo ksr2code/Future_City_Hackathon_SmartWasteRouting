@@ -10,6 +10,7 @@ deliberately NOT asserted (no faked bitwise determinism).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
@@ -37,7 +38,11 @@ from src.routing.solver import (
     Route,
     RoutingSolution,
     RoutingSolverError,
+    _build_layout,
+    _build_model,
     _map_status,
+    _resolve_status,
+    _solve_model,
     _unserved_reason,
     solve,
 )
@@ -597,7 +602,10 @@ def test_timeout_status_reports_objective_none_when_no_solution() -> None:
         assert solution.routes == []
         assert solution.totals.stops_served == 0
         assert len(solution.unserved) == 3
-        assert all("time limit" in reason.lower() for _k, reason in solution.unserved)
+        assert all(
+            "safety cap fired" in reason.lower() and "not reproducible" in reason.lower()
+            for _k, reason in solution.unserved
+        )
     else:
         assert solution.status in {"optimal", "feasible"}
         assert_solution_invariants(solution, fixture)
@@ -630,3 +638,149 @@ def test_route_sequence_starts_and_ends_at_depot_and_contains_progression() -> N
         assert len(route.load_progression) == len(stops)
         for volume, weight in route.load_progression:
             assert isinstance(volume, int) and isinstance(weight, int)
+
+
+# ---------------------------------------------------------------------------
+# §4.7 v2 determinism gate: solution budget reached ⇒ identical distances
+# ---------------------------------------------------------------------------
+
+GRID_COLS = 8
+GRID_STOPS = 48  # >= ~40: GLS must still be finding solutions at the budget
+
+
+def make_grid_problem() -> RoutingProblem:
+    """48 synthetic grid stops with varied derived pairwise distances — big
+    enough that guided local search hits the 200-solution budget instead of
+    exhausting on its own. Distances are deterministic derived integers
+    (metre-scaled planar approximation), symmetric with zero diagonal."""
+    stops = [
+        Stop(
+            location_id=f"grid-{i:03d}",
+            material_type="green",
+            lat=49.15 + 0.002 * (i // GRID_COLS),
+            lon=9.22 + 0.002 * (i % GRID_COLS),
+            container_volume_litres=1_000,
+            predicted_fill_pct=100.0,
+            service_minutes=2,  # keeps 48 stops far inside the shift
+        )
+        for i in range(GRID_STOPS)
+    ]
+    ids = [DEPOT.id, DISPOSAL.id] + [stop_point_id(stop) for stop in stops]
+    points = [(DEPOT.lat, DEPOT.lon), (DISPOSAL.lat, DISPOSAL.lon)] + [
+        (stop.lat, stop.lon) for stop in stops
+    ]
+    n = len(ids)
+    distance = [[0] * n for _ in range(n)]
+    duration = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            (lat_i, lon_i), (lat_j, lon_j) = points[i], points[j]
+            metres = max(
+                1,
+                round(math.hypot((lat_i - lat_j) * 111_320.0, (lon_i - lon_j) * 74_200.0)),
+            )
+            distance[i][j] = distance[j][i] = metres
+            duration[i][j] = duration[j][i] = max(1, metres // 500)
+    travel = TravelMatrix(
+        point_ids=ids,
+        distance_m=distance,
+        duration_min=duration,
+        provenance="haversine_straight_line_derived",
+    )
+    config = RoutingConfig(
+        max_shift_minutes=600,
+        densities_kg_per_litre={"brown": 1.0, "green": 1.0, "white": 1.0},
+        detour_factor=1.4,
+        avg_speed_kmh=30.0,
+        # §4.6 v2 defaults: solver_solution_limit=200 (primary stop),
+        # solver_time_limit_s=30.0 (safety cap only) — asserted below.
+    )
+    return RoutingProblem(
+        depot=DEPOT,
+        disposal_sites=[DISPOSAL],
+        stops=stops,
+        vehicle_types=[make_vehicle(volume_capacity_litres=60_000, weight_capacity_kg=60_000)],
+        travel=travel,
+        config=config,
+    )
+
+
+def test_solution_budget_is_reached_and_distances_identical_across_five_solves() -> None:
+    """§4.4/§4.7 gate: repeated solves that reach the fixed solution budget
+    return identical totals.distance_m (deterministic stop criterion)."""
+    problem = make_grid_problem()
+    assert problem.config.solver_solution_limit == 200
+    assert problem.config.solver_time_limit_s == 30.0
+
+    # Probe the internals once: the budget must actually be the stopping
+    # reason (solutions_found == limit), not early exhaustion or the cap.
+    layout = _build_layout(problem, set())
+    _manager, routing = _build_model(problem, layout)
+    outcome = _solve_model(problem, routing)
+    assert outcome.solutions_found == problem.config.solver_solution_limit
+    assert outcome.solutions_found == 200
+
+    distances: list[int] = []
+    for _ in range(5):
+        solution = solve(problem)
+        assert solution.status == "feasible"  # budget stop, never timeout
+        distances.append(solution.totals.distance_m)
+        assert solution.totals.stops_served + len(solution.unserved) == GRID_STOPS
+    assert_solution_invariants(solution, Fixture(problem=problem, stops=problem.stops))
+    assert len(set(distances)) == 1, f"distance varied across budgeted solves: {distances}"
+
+
+# ---------------------------------------------------------------------------
+# §4.7 v2 _resolve_status: stop-criterion evidence classification
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_status_cap_fired_with_solution_shortfall_is_timeout() -> None:
+    # Raw status maps to "feasible", but few solutions were found and the
+    # measured elapsed time sits at the configured cap ⇒ honest "timeout".
+    fixture = make_fixture(config=make_config(solver_time_limit_s=0.4))
+    status = _resolve_status(
+        STATUS.ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED,
+        solutions_found=3,
+        elapsed_s=0.4,
+        problem=fixture.problem,
+    )
+    assert status == "timeout"
+
+
+def test_resolve_status_budget_reached_is_feasible_even_if_slow() -> None:
+    # The primary stop is the solution budget: reaching it is deterministic
+    # and stays "feasible" even when elapsed time brushed the safety cap.
+    fixture = make_fixture(config=make_config(solver_time_limit_s=0.4))
+    status = _resolve_status(
+        STATUS.ROUTING_SUCCESS,
+        solutions_found=200,  # == config.solver_solution_limit
+        elapsed_s=0.9,
+        problem=fixture.problem,
+    )
+    assert status == "feasible"
+
+
+def test_resolve_status_exhausted_early_is_feasible() -> None:
+    # Small problem: search ended on its own before both limits ⇒ the
+    # deterministic "feasible", not a timeout.
+    fixture = make_fixture(config=make_config(solver_time_limit_s=0.4))
+    status = _resolve_status(
+        STATUS.ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED,
+        solutions_found=3,
+        elapsed_s=0.05,  # well under 0.4 - tolerance
+        problem=fixture.problem,
+    )
+    assert status == "feasible"
+
+
+def test_resolve_status_raw_timeout_stays_timeout() -> None:
+    # FAIL_TIMEOUT maps straight to "timeout" regardless of the counters.
+    fixture = make_fixture(config=make_config(solver_time_limit_s=0.4))
+    status = _resolve_status(
+        STATUS.ROUTING_FAIL_TIMEOUT,
+        solutions_found=1,
+        elapsed_s=0.05,
+        problem=fixture.problem,
+    )
+    assert status == "timeout"

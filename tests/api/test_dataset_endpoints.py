@@ -228,7 +228,8 @@ class TestConfig:
         assert routing["max_shift_minutes"] == 480
         assert routing["avg_speed_kmh"] == 30.0
         assert routing["detour_factor"] == 1.4
-        assert routing["solver_time_limit_s"] == 5.0
+        assert routing["solver_solution_limit"] == 200  # §4.6 v2 primary stop
+        assert routing["solver_time_limit_s"] == 30.0  # §4.6 v2 safety cap only
 
     def test_config_labels_every_demo_assumption_field(self, client: TestClient) -> None:
         body = client.get("/api/config").json()

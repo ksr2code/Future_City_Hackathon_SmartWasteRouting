@@ -33,6 +33,7 @@ __all__ = [
     "DEMO_DISPOSAL_NAME",
     "DEMO_DISPOSAL_SERVICE_MINUTES",
     "DEMO_MAX_SHIFT_MINUTES",
+    "DEMO_SOLVER_SOLUTION_LIMIT",
     "DEMO_SOLVER_TIME_LIMIT_S",
     "DEMO_STOP_SERVICE_MINUTES",
     "DEMO_VEHICLE_COUNT_AVAILABLE",
@@ -70,9 +71,15 @@ DEMO_MAX_SHIFT_MINUTES = 480  # minutes; 8 h demo cap §4.6 [demo assumption]
 DEMO_AVG_SPEED_KMH = 30.0  # km/h; urban demo speed §4.6 [demo assumption]
 DEMO_DETOUR_FACTOR = 1.4  # haversine → approx road factor §4.6 [demo assumption]
 
-# [demo assumption] — not in the §4.6 user agreement; keeps M9 solver runs
-# bounded for the live demo. Listed here so all demo numbers stay in one place.
-DEMO_SOLVER_TIME_LIMIT_S = 5.0  # seconds
+# --- §4.6 v2 solver defaults (user-approved 2026-11-14) ---------------------
+
+# Primary stopping criterion (§4.4/§4.7): a fixed solution budget — repeated
+# solves that reach it return identical totals.distance_m [demo assumption].
+DEMO_SOLVER_SOLUTION_LIMIT = 200
+
+# Safety cap only (§4.7): fires before the solution limit ⇒ status "timeout",
+# run explicitly not reproducible [demo assumption].
+DEMO_SOLVER_TIME_LIMIT_S = 30.0
 
 # --- Synthetic demo geography (§4.5: no real coordinates exist) ------------
 
@@ -132,5 +139,6 @@ def demo_routing_config() -> RoutingConfig:
         },
         detour_factor=DEMO_DETOUR_FACTOR,
         avg_speed_kmh=DEMO_AVG_SPEED_KMH,
+        solver_solution_limit=DEMO_SOLVER_SOLUTION_LIMIT,
         solver_time_limit_s=DEMO_SOLVER_TIME_LIMIT_S,
     )

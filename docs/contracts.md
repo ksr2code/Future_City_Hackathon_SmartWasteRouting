@@ -219,7 +219,8 @@ VehicleType   = { id, name, volume_capacity_litres, weight_capacity_kg,
 RoutingConfig = { max_shift_minutes,            # [demo assumption] brief §3
                   densities_kg_per_litre: {material: float},   # defaults §4.6, request-overridable
                   detour_factor, avg_speed_kmh, # [demo assumption] matrix derivation
-                  solver_time_limit_s }
+                  solver_solution_limit,        # int >= 1; primary stopping criterion (v2, §4.7)
+                  solver_time_limit_s }         # safety cap only (v2, §4.7)
 TravelMatrix  = { point_ids: [depot+disposal+stop ids],
                   distance_m: n×n int,
                   duration_min: n×n int,        # distance/speed unless supplied
@@ -257,7 +258,9 @@ Route = { vehicle_type_id, sequence: list[Stop|DisposalSite|Depot>,
 - Route duration ≤ `max_shift_minutes` or the violation is reported, not hidden.
 - Fleet recommendation = max(⌈volume/capacity⌉, ⌈weight/capacity⌉) per vehicle
   type [protocol choice v1; document in model card].
-- Deterministic given inputs, config and solver time limit/seed.
+- Deterministic given inputs, config and OR-Tools version when the solution
+  limit is reached (identical `totals.distance_m`); only a fired safety-cap
+  timeout reintroduces wall-clock variance (§4.7).
 
 Protocol choices agreed at M9 review (2026-11-14):
 - **No OR-Tools time dimension** (empirically: a span cap on any optional node
@@ -272,6 +275,46 @@ Protocol choices agreed at M9 review (2026-11-14):
 - A vehicle may end at the depot with load aboard (yard absorbs it)
   **[demo assumption]**; fleet recommendation covers full demand including
   unserved stops.
+
+Protocol choices agreed 2026-11-14 (v2 determinism, user-approved):
+- **Primary stopping criterion is `solver_solution_limit`** (fixed solution
+  budget, no wall-clock dependence); repeated solves that reach the limit on
+  the same problem must return identical `totals.distance_m`.
+- `solver_time_limit_s` is a **safety cap only**: if it fires before the
+  solution limit, status is `timeout` and the run is explicitly
+  non-reproducible — never silently presented as deterministic.
+
+### 4.7 Comparison baselines (M12 v2, user-approved 2026-11-14)
+
+Gain-decomposition scenarios, all sharing the §4.6 demo physics, the §3
+selection policy (where applied) and the naive simulation semantics of
+`src/routing/naive.py` (capacities, nearest-disposal unload, shift rules,
+fleet exhaustion, per-stop unserved reasons):
+
+| scenario id | stops visited | order | isolates |
+|---|---|---|---|
+| `naive_sweep_all` | all series (no selection) | area sweep (below) | status quo |
+| `naive_sweep_selected` | policy-selected only | same area sweep | — (gain reference) |
+| `ortools` | policy-selected only | OR-Tools (§4.3) | routing gain |
+
+- **Area sweep order** [demo assumption — no area field in data, observed]:
+  synthetic stop coordinates bucketed into grid cells of
+  `SWEEP_CELL_SIZE_DEG = 0.01°` (module constant in `src/routing/naive.py`,
+  ≈ 1 km, [demo assumption]); cells visited in fixed row-major order
+  (lat band ascending, then lon ascending), stops within a cell in
+  lexicographic `(location_id, material_type)` order.
+- **Gains** (derived, reported in metres and per-stop/per-kg):
+  selection gain = `naive_sweep_all − naive_sweep_selected` distance;
+  routing gain = `naive_sweep_selected − ortools` distance; total = sum.
+  Different served-stop counts across scenarios are inherent — normalise
+  with the per-stop/per-kg metrics, never claim like-for-like distance.
+- **Repetition protocol** (optimised scenario only): solve `runs = 5`
+  [demo assumption] times; report `mode: "identical"` (range 0) or
+  `"median_of_runs"` with min/median/max distance; **median is the value
+  used in the UI and docs**.
+- Legacy `naive_fixed_order` (lexicographic) stays implemented and tested
+  for continuity but is **not** part of the API scenarios array; it remains
+  a docs/tests baseline only.
 
 ### 4.5 Inputs still missing (ask host on site)
 
@@ -296,7 +339,8 @@ echoes the effective config; M11 renders an editable panel that keeps the
 | `max_shift_minutes` | 480 | 8 h demo cap |
 | `avg_speed_kmh` | 30 | urban demo speed |
 | `detour_factor` | 1.4 | haversine→approx road factor; provenance stays "straight-line derived" |
-| `solver_time_limit_s` | 5.0 | keeps demo solver runs bounded; not part of the user agreement |
+| `solver_solution_limit` | 200 | v2 primary stopping criterion (deterministic; §4.7) |
+| `solver_time_limit_s` | 30.0 | safety cap only (v2): fires ⇒ status `timeout`, run not reproducible |
 
 Host-supplied values replace defaults in config only — never silent.
 
@@ -319,7 +363,7 @@ prototype limitation, not a persistence claim.
 | POST | `/api/forecasts` | run baselines (§2) | `ForecastRequest` → `ForecastResponse` |
 | POST | `/api/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
 | POST | `/api/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
-| GET | `/api/comparison` | naive fixed-order vs optimised summary (M12 demo story) | — → `ComparisonResponse`; 404 if no dataset |
+| GET | `/api/comparison` | scenario comparison with gain decomposition (§4.7, M12) | — → `ComparisonResponse`; 404 if no dataset |
 | POST | `/api/datasets/demo` | load server-side demo CSV (path fixed server-side, never client-supplied) | — → `DatasetUploadResponse`; 404 if file absent; 422 on §1 errors (same rules as upload) |
 
 Routers mount under the **`/api` prefix**; the Vite dev proxy forwards `/api/*`
@@ -342,7 +386,8 @@ routing_config (v1 applies to the single demo vehicle type; all optional):
   { container_volume_litres, densities_kg_per_litre: {brown, green, white},
     vehicle_volume_capacity_litres, vehicle_weight_capacity_kg,
     vehicle_count_available, stop_service_minutes, disposal_service_minutes,
-    max_shift_minutes, avg_speed_kmh, detour_factor, solver_time_limit_s }
+    max_shift_minutes, avg_speed_kmh, detour_factor, solver_solution_limit,
+    solver_time_limit_s }
 ConfigDefaults  = { policy: §3.1 fields, routing: the routing_config defaults
                     above (§4.6 values), assumption_fields: [names of every
                     field that is a demo assumption] }
@@ -380,24 +425,44 @@ share. These are shares of **readings**, not emptying events — the data has
 no collection events [observed]; never worded as "emptyings".
 
 ```text
-ComparisonScenario = { method: "naive_fixed_order" | "ortools", status,
-                       distance_m, duration_min, stops_served, stops_total,
+ComparisonScenario = { method: "naive_sweep_all" | "naive_sweep_selected" | "ortools",
+                       status, distance_m, duration_min, stops_served, stops_total,
                        vehicles_available, vehicles_used,
                        collected_volume_litres, collected_weight_kg,
                        unserved_count, recommended_trucks,
-                       fleet_basis: {ceil_by_volume, ceil_by_weight} }
-ComparisonResponse = { as_of_date, target_date, horizon_days,   # v1 fixed CLI defaults, echoed
+                       fleet_basis: {ceil_by_volume, ceil_by_weight},
+                       distance_per_stop_m | null,        # distance_m / stops_served, 1 d.p.
+                       distance_per_kg_m | null }         # distance_m / collected_weight_kg, 1 d.p.
+ComparisonResponse = { as_of_date, target_date, horizon_days,   # fixed CLI defaults, echoed
                        method: "persistence",
-                       naive: ComparisonScenario,
-                       optimised: ComparisonScenario
-                         + { selected_count, skipped_count },
+                       scenarios: [ComparisonScenario],         # §4.7 ids, fixed order
+                       gains: { selection_gain_m | null,        # sweep_all − sweep_selected
+                                routing_gain_m | null,          # sweep_selected − ortools (median)
+                                total_gain_m | null },
+                       optimised_determinism: { runs: int,
+                                                mode: "identical" | "median_of_runs",
+                                                distance_m_median, distance_m_min,
+                                                distance_m_max },
                        distance_provenance, assumptions: [labels] }
 ```
 
+- v2 (2026-11-14, user-approved) **replaces** the v1 `naive`/`optimised`
+  top-level keys with the `scenarios` array + `gains` + `optimised_determinism`
+  (breaking for the frontend — M11 follow-up consumes the new shape).
+- Per-stop/per-kg metrics are `null` on zero denominators (e.g. fleet
+  exhausted before any stop), never a fabricated 0-division value.
+- The `ortools` scenario's `distance_m`/`duration_min`/per-metric values are
+  the **medians across `runs` solves** (§4.7); min/max live only in
+  `optimised_determinism`. Scenario ordering in the array:
+  `naive_sweep_all`, `naive_sweep_selected`, `ortools`.
+- `distance_provenance` is `haversine_straight_line_derived` — never
+  presented as road distance.
+
 - `/api/comparison` reuses the M12 comparison core (refactor
   `src/api/compare_demo.py` so CLI and endpoint share one function; CLI
-  behaviour unchanged). Optimised totals vary slightly run-to-run (GLS, §4.4)
-  — noted in `assumptions`. `distance_provenance` is
+  behaviour unchanged). Reproducibility follows §4.7: medians across `runs`
+  solves; residual variance, if any, is reported in `optimised_determinism`
+  and noted in `assumptions`. `distance_provenance` is
   `haversine_straight_line_derived` — never presented as road distance.
 - `/api/datasets/demo` reads the demo CSV from a single server-side constant
   path; the response labels `source_name` with a `demo:` prefix so the UI can

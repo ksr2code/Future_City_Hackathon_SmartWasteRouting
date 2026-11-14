@@ -11,10 +11,15 @@ and over-long routes are truncated by ``_apply_shift_limits`` (§4.4:
 violations are surfaced, never hidden); durations are recomputed from the
 travel matrix either way.
 OR-Tools only (AGENTS rule 8). Deterministic node order and reasons; the
-search uses PATH_CHEAPEST_ARC + GUIDED_LOCAL_SEARCH bounded by
-``RoutingConfig.solver_time_limit_s`` — a wall-clock-bounded metaheuristic may
-vary exact sequences between runs, so determinism is claimed (and tested) as
-*same status + same invariants*, never bitwise (§4.4).
+search uses PATH_CHEAPEST_ARC + GUIDED_LOCAL_SEARCH. v2 determinism protocol
+(§4.4/§4.7, user-approved 2026-11-14): the **primary stopping criterion is
+``RoutingConfig.solver_solution_limit``** — a fixed solution budget counted
+via ``AddAtSolutionCallback``, with no wall-clock dependence, so repeated
+solves that reach the budget return identical ``totals.distance_m``.
+``solver_time_limit_s`` is a **safety cap only**: when it fires before the
+solution budget (detected from the solutions counter and the measured
+elapsed time, never guessed), the status is honestly ``timeout`` and the run
+is explicitly non-reproducible (§4.7).
 
 Model notes (all [protocol choice v1], documented for the model card):
 - Load cumul semantics: the transit callback adds a stop's pickup on the arc
@@ -31,11 +36,14 @@ Model notes (all [protocol choice v1], documented for the model card):
 - Reported ``objective_value`` is the solved routes' total distance in metres
   (the solver's internal objective mixes in drop penalties, so it is not
   reported).
-- Status mapping: ROUTING_OPTIMAL → "optimal" (proven optimality); SUCCESS /
-  PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED → "feasible" (solution found,
-  optimality not proven); FAIL / INFEASIBLE → "infeasible"; FAIL_TIMEOUT →
-  "timeout"; NOT_SOLVED / INVALID → :class:`RoutingSolverError` (a search that
-  never ran is a bug, not a user-facing status).
+- Status mapping: ROUTING_OPTIMAL → "optimal" (proven optimality);
+  SUCCESS / PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED → "feasible" **when the
+  solution budget was reached** (or the search ended on its own before both
+  limits); FAIL / INFEASIBLE → "infeasible"; FAIL_TIMEOUT → "timeout";
+  NOT_SOLVED / INVALID → :class:`RoutingSolverError` (a search that never ran
+  is a bug, not a user-facing status). SUCCESS/PARTIAL with fewer solutions
+  than the budget while the measured elapsed time shows the safety cap fired
+  → "timeout" (§4.7: never silently presented as deterministic).
 
 Distance provenance is echoed from the travel matrix untouched —
 straight-line-derived matrices are never called road distance (§4.2).
@@ -43,6 +51,7 @@ straight-line-derived matrices are never called road distance (§4.2).
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, NamedTuple, TypeAlias
@@ -305,18 +314,85 @@ def _build_model(
     return manager, routing
 
 
-def _solve_model(
-    problem: RoutingProblem, routing: pywrapcp.RoutingModel
-) -> tuple[pywrapcp.Assignment | None, int]:
-    """Run the search with the configured strategy and time limit."""
+@dataclass(frozen=True)
+class _SearchOutcome:
+    """Raw search results plus the v2 §4.7 stop-criterion evidence.
+
+    ``solutions_found`` counts intermediate solutions reported by the solver
+    (``AddAtSolutionCallback``); together with the measured ``elapsed_s`` it
+    classifies WHY the search stopped — the solution budget (deterministic)
+    or the wall-clock safety cap (non-reproducible, §4.7) — instead of
+    guessing from the raw status alone.
+    """
+
+    assignment: pywrapcp.Assignment | None
+    raw_status: int
+    solutions_found: int
+    elapsed_s: float
+
+
+# Tolerance for classifying the safety cap as fired: OR-Tools enforces the
+# time limit at millisecond granularity, so a cap-bounded run ends within a
+# few milliseconds past (or a hair under) the configured seconds.
+_SAFETY_CAP_TOLERANCE_S = 0.01
+
+
+def _resolve_status(
+    raw_status: int,
+    solutions_found: int,
+    elapsed_s: float,
+    problem: RoutingProblem,
+) -> SolutionStatus:
+    """Honest §4.3/§4.7 status mapping driven by stop-criterion evidence.
+
+    - The solution budget (``solver_solution_limit``) is the primary stop:
+      reaching it is deterministic and reported as "feasible" (or "optimal"
+      when OR-Tools proved optimality).
+    - The wall-clock ``solver_time_limit_s`` is a safety cap only: raw
+      FAIL_TIMEOUT, or a solution-short stop with the cap measured as fired,
+      is reported as "timeout" — explicitly non-reproducible (§4.7).
+    - A search that ends on its own before both limits (small problems where
+      GUIDED_LOCAL_SEARCH runs out of improving moves) is deterministic and
+      reported as "feasible".
+    """
+    status = _map_status(raw_status)
+    if (
+        status == "feasible"
+        and solutions_found < problem.config.solver_solution_limit
+        and elapsed_s >= problem.config.solver_time_limit_s - _SAFETY_CAP_TOLERANCE_S
+    ):
+        # The budget was NOT the stop: the safety cap fired (the measured
+        # elapsed time sits at the configured limit — report the honest,
+        # non-reproducible "timeout", §4.7). A search that instead ends on
+        # its own before both limits is deterministic and stays "feasible".
+        return "timeout"
+    return status
+
+
+def _solve_model(problem: RoutingProblem, routing: pywrapcp.RoutingModel) -> _SearchOutcome:
+    """Run the search with the configured strategy and §4.7 v2 limits: the
+    solution budget as the primary stop and the wall-clock time limit as a
+    safety cap only. The solutions counter and elapsed time are the evidence
+    used by :func:`_resolve_status` to classify the stop criterion."""
     search = pywrapcp.DefaultRoutingSearchParameters()
     search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     search.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
+    search.solution_limit = problem.config.solver_solution_limit
     millis = max(1, round(problem.config.solver_time_limit_s * 1000))
     search.time_limit.FromMilliseconds(millis)
-    return routing.SolveWithParameters(search), routing.status()
+    counter = [0]  # int cell so the solver callback can increment by reference
+    routing.AddAtSolutionCallback(lambda: counter.__setitem__(0, counter[0] + 1))
+    started_s = time.perf_counter()
+    assignment = routing.SolveWithParameters(search)
+    elapsed_s = time.perf_counter() - started_s
+    return _SearchOutcome(
+        assignment=assignment,
+        raw_status=routing.status(),
+        solutions_found=counter[0],
+        elapsed_s=elapsed_s,
+    )
 
 
 def _extract_routes(
@@ -627,8 +703,10 @@ def _unserved_reason(stop: Stop, problem: RoutingProblem) -> str:
 
 def _global_unserved(status: SolutionStatus, problem: RoutingProblem) -> list[UnservedStop]:
     reason = (
-        f"solver found no feasible solution within the "
-        f"{problem.config.solver_time_limit_s} s time limit"
+        f"solver stopped before the solution limit "
+        f"{problem.config.solver_solution_limit}: the "
+        f"{problem.config.solver_time_limit_s} s wall-clock safety cap fired "
+        "(status timeout — this run is not reproducible, contract §4.7)"
         if status == "timeout"
         else "solver proved the problem infeasible; no stop can be served"
     )
@@ -657,11 +735,13 @@ def _empty_totals(problem: RoutingProblem) -> SolutionTotals:
 def solve(problem: RoutingProblem) -> RoutingSolution:
     """Solve a :class:`RoutingProblem` into a contract §4.3 solution.
 
-    Deterministic node order and reasons; search bounded by
-    ``config.solver_time_limit_s`` (see module docstring for the honest
-    determinism claim). Every input stop is served in exactly one route or
-    reported in ``unserved`` with a reason (§4.4). The fleet recommendation
-    (§4.4) always covers the full demand, including unserved stops.
+    Deterministic node order and reasons; the search stops on the configured
+    solution budget (``config.solver_solution_limit``, primary criterion) with
+    ``config.solver_time_limit_s`` as a safety cap only (§4.4/§4.7 v2 — see
+    the module docstring for the honest determinism claim). Every input stop
+    is served in exactly one route or reported in ``unserved`` with a reason
+    (§4.4). The fleet recommendation (§4.4) always covers the full demand,
+    including unserved stops.
     """
     fleet_recommendation_result = recommend_fleet_for_problem(problem)
     provenance: Provenance = problem.travel.provenance
@@ -681,10 +761,12 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
     excluded_stop_keys = {entry.stop_key for entry in prefiltered_unserved}
     layout = _build_layout(problem, excluded_stop_keys)
     manager, routing = _build_model(problem, layout)
-    assignment, raw_status = _solve_model(problem, routing)
-    status = _map_status(raw_status)
+    outcome = _solve_model(problem, routing)
+    status = _resolve_status(
+        outcome.raw_status, outcome.solutions_found, outcome.elapsed_s, problem
+    )
 
-    if assignment is None or status in ("infeasible", "timeout"):
+    if outcome.assignment is None or status in ("infeasible", "timeout"):
         # No usable solution: surface every stop as unserved, never hidden.
         return RoutingSolution(
             status=status,
@@ -696,7 +778,7 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
             distance_provenance=provenance,
         )
 
-    routes, visited_nodes = _extract_routes(problem, layout, manager, routing, assignment)
+    routes, visited_nodes = _extract_routes(problem, layout, manager, routing, outcome.assignment)
     routes, truncated_unserved = _apply_shift_limits(routes, problem)
     dropped_nodes = sorted(
         (node for node in layout.stops_by_node if node not in visited_nodes),

@@ -46,7 +46,7 @@ CONFIG = RoutingConfig(
     densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
     detour_factor=1.4,
     avg_speed_kmh=30.0,
-    solver_time_limit_s=5.0,
+    solver_time_limit_s=30.0,
 )
 
 
@@ -267,7 +267,7 @@ def test_config_shift_minutes_must_be_positive(bad_shift: int) -> None:
             densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
             detour_factor=1.4,
             avg_speed_kmh=30.0,
-            solver_time_limit_s=5.0,
+            solver_time_limit_s=30.0,
         )
 
 
@@ -289,7 +289,7 @@ def test_config_densities_must_cover_all_materials_positive(
             densities_kg_per_litre=bad_densities,  # type: ignore[arg-type]
             detour_factor=1.4,
             avg_speed_kmh=30.0,
-            solver_time_limit_s=5.0,
+            solver_time_limit_s=30.0,
         )
 
 
@@ -301,7 +301,7 @@ def test_config_detour_factor_must_be_at_least_one(bad_detour: float) -> None:
             densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
             detour_factor=bad_detour,
             avg_speed_kmh=30.0,
-            solver_time_limit_s=5.0,
+            solver_time_limit_s=30.0,
         )
 
 
@@ -313,7 +313,7 @@ def test_config_speed_must_be_positive(bad_speed: float) -> None:
             densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
             detour_factor=1.4,
             avg_speed_kmh=bad_speed,
-            solver_time_limit_s=5.0,
+            solver_time_limit_s=30.0,
         )
 
 

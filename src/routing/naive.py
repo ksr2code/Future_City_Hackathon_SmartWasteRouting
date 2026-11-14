@@ -2,10 +2,20 @@
 
 Deterministic simulation, **no OR-Tools** (AGENTS rule 8 applies to routing
 optimisation; this module is the deliberately naive comparison anchor for the
-M9 optimiser, defined by the user on 2026-11-14). It visits **all** stops of
-the problem in fixed lexicographic ``(location_id, material_type)`` order —
-the data has no area/zone field [observed, contract §4.5], so the visiting
-order is a **[demo assumption]**, not derived from geography.
+M9 optimiser, defined by the user on 2026-11-14). It visits the stops of the
+problem in one of two fixed deterministic orders — the data has no area/zone
+field [observed, contract §4.5], so every visiting order is a **[demo
+assumption]**, never derived from real geography:
+
+- ``naive_fixed_order``: lexicographic ``(location_id, material_type)`` over
+  all stops — the M12 v1 baseline, kept for continuity (docs/tests only,
+  contract §4.7: not part of the API scenarios array).
+- ``naive_sweep_order`` (v2, §4.7): area sweep — stops bucketed into grid
+  cells of ``SWEEP_CELL_SIZE_DEG`` degrees (≈ 1 km, [demo assumption]), cells
+  visited in fixed row-major order (lat band ascending, then lon ascending),
+  stops within a cell in lexicographic ``(location_id, material_type)``
+  order. Powers both ``naive_sweep_all`` (all series) and
+  ``naive_sweep_selected`` (policy-selected stops only) API scenarios.
 
 Simulation rules (user-defined, deterministic):
 - Per stop, collect ``round(container_volume_litres x predicted_fill_pct/100)``
@@ -39,14 +49,15 @@ hidden).
 
 Output mirrors the contract §4.3 keys (``totals``, ``unserved``,
 ``fleet_recommendation``, ``distance_provenance``) plus ``method`` =
-``"naive_fixed_order"``. Distance provenance is echoed from the travel matrix
-untouched — straight-line-derived matrices are never presented as road
-distance (contract §4.2).
+``"naive_fixed_order"`` or ``"naive_sweep_order"``. Distance provenance is
+echoed from the travel matrix untouched — straight-line-derived matrices are
+never presented as road distance (contract §4.2).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -65,13 +76,45 @@ from src.routing.solver import SolutionTotals, UnservedStop
 
 __all__ = [
     "METHOD_NAIVE_FIXED_ORDER",
+    "METHOD_NAIVE_SWEEP_ORDER",
+    "SWEEP_CELL_SIZE_DEG",
     "NaiveRoute",
     "NaiveSolution",
     "NaiveStatus",
     "naive_fixed_order_simulation",
+    "naive_sweep_simulation",
+    "sweep_visit_order",
 ]
 
 METHOD_NAIVE_FIXED_ORDER: Literal["naive_fixed_order"] = "naive_fixed_order"
+METHOD_NAIVE_SWEEP_ORDER: Literal["naive_sweep_order"] = "naive_sweep_order"
+
+NaiveMethod: TypeAlias = Literal["naive_fixed_order", "naive_sweep_order"]
+
+# §4.7 area-sweep grid cell size in degrees (≈ 1 km) [demo assumption — the
+# data has no area field, observed; every visiting order is a labelled choice].
+SWEEP_CELL_SIZE_DEG = 0.01
+
+
+def sweep_visit_order(stops: Iterable[Stop]) -> list[Stop]:
+    """§4.7 area-sweep visiting order (deterministic): grid cells of
+    ``SWEEP_CELL_SIZE_DEG`` degrees bucketed by ``floor(coordinate / cell)``,
+    visited row-major (lat band ascending, then lon ascending), stops within
+    a cell in lexicographic ``(location_id, material_type)`` order."""
+    cell = SWEEP_CELL_SIZE_DEG
+
+    def cell_of(stop: Stop) -> tuple[int, int]:
+        return math.floor(stop.lat / cell), math.floor(stop.lon / cell)
+
+    return sorted(
+        stops,
+        key=lambda stop: (
+            *cell_of(stop),
+            stop.location_id,
+            stop.material_type,
+        ),
+    )
+
 
 NaiveStatus: TypeAlias = Literal["complete", "incomplete"]
 """Simulation outcome: ``complete`` iff every stop was served; ``incomplete``
@@ -99,7 +142,7 @@ class NaiveRoute:
 class NaiveSolution:
     """Complete naive-baseline output — contract §4.3 keys + method label."""
 
-    method: Literal["naive_fixed_order"]
+    method: NaiveMethod
     status: NaiveStatus
     routes: list[NaiveRoute]
     unserved: list[UnservedStop]
@@ -147,16 +190,17 @@ def _fleet_exhausted_reason(problem: RoutingProblem) -> str:
     )
 
 
-def naive_fixed_order_simulation(
+def _simulate_order(
     problem: RoutingProblem,
-    no_forecast_stop_keys: Sequence[SeriesKey] = (),
+    ordered_stops: list[Stop],
+    no_forecast_stop_keys: Sequence[SeriesKey],
+    method: NaiveMethod,
 ) -> NaiveSolution:
-    """Simulate the naive fixed-order collection over **all** problem stops.
-
-    Deterministic: same problem (and keys) ⇒ identical
-    :class:`NaiveSolution`. Distances/durations come from the travel matrix;
-    provenance is echoed, never renamed.
-    """
+    """Shared simulation core: visit ``ordered_stops`` in the given fixed
+    order with the deterministic physics below (capacities, nearest-disposal
+    unload, shift hand-over, fleet exhaustion — never silent drops, §4.4).
+    Both ``naive_fixed_order_simulation`` and ``naive_sweep_simulation`` call
+    it with their respective orders; same inputs ⇒ identical output."""
     matrix = problem.travel
     index = {point_id: i for i, point_id in enumerate(matrix.point_ids)}
     distance_m = matrix.distance_m
@@ -183,7 +227,6 @@ def naive_fixed_order_simulation(
         )
 
     fleet = _expanded_fleet(problem)
-    stops_ordered = sorted(problem.stops, key=lambda stop: (stop.location_id, stop.material_type))
 
     routes: list[NaiveRoute] = []
     unserved: list[UnservedStop] = []
@@ -239,7 +282,7 @@ def naive_fixed_order_simulation(
         progression = []
 
     stop_cursor = 0
-    while stop_cursor < len(stops_ordered):
+    while stop_cursor < len(ordered_stops):
         if vehicle_index >= len(fleet):
             # Vehicles exhausted — every remaining stop is unserved (§4.4).
             unserved.extend(
@@ -247,11 +290,11 @@ def naive_fixed_order_simulation(
                     stop_key=(stop.location_id, stop.material_type),
                     reason=_fleet_exhausted_reason(problem),
                 )
-                for stop in stops_ordered[stop_cursor:]
+                for stop in ordered_stops[stop_cursor:]
             )
             break
 
-        stop = stops_ordered[stop_cursor]
+        stop = ordered_stops[stop_cursor]
         stop_pid = stop_point_id(stop)
         collected_volume = stop.collected_volume_litres
         collected_weight = stop.collected_weight_kg(densities[stop.material_type])
@@ -336,11 +379,11 @@ def naive_fixed_order_simulation(
             stop.collected_weight_kg(densities[stop.material_type]) for stop in served_stops
         ),
         stops_served=len(served_stops),
-        stops_total=len(problem.stops),
+        stops_total=len(ordered_stops),
     )
 
     return NaiveSolution(
-        method=METHOD_NAIVE_FIXED_ORDER,
+        method=method,
         status="complete" if not unserved else "incomplete",
         routes=routes,
         unserved=sorted(unserved, key=lambda entry: entry.stop_key),
@@ -350,3 +393,37 @@ def naive_fixed_order_simulation(
         no_forecast_stop_keys=sorted(set(no_forecast_stop_keys)),
         shift_violations=shift_violations,
     )
+
+
+def naive_fixed_order_simulation(
+    problem: RoutingProblem,
+    no_forecast_stop_keys: Sequence[SeriesKey] = (),
+) -> NaiveSolution:
+    """Legacy M12 v1 baseline: lexicographic ``(location_id, material_type)``
+    order over **all** problem stops (contract §4.7: docs/tests baseline only,
+    not part of the API scenarios array).
+
+    Deterministic: same problem (and keys) ⇒ identical
+    :class:`NaiveSolution`. Distances/durations come from the travel matrix;
+    provenance is echoed, never renamed.
+    """
+    ordered = sorted(problem.stops, key=lambda stop: (stop.location_id, stop.material_type))
+    return _simulate_order(problem, ordered, no_forecast_stop_keys, METHOD_NAIVE_FIXED_ORDER)
+
+
+def naive_sweep_simulation(
+    problem: RoutingProblem,
+    no_forecast_stop_keys: Sequence[SeriesKey] = (),
+    stops: Iterable[Stop] | None = None,
+) -> NaiveSolution:
+    """§4.7 area-sweep baseline (v2): ``sweep_visit_order`` over ``stops``
+    (default: **all** problem stops). Passing the policy-selected subset gives
+    the ``naive_sweep_selected`` scenario; all stops gives
+    ``naive_sweep_all`` — identical simulation physics in both cases.
+
+    Deterministic: same problem (and stops) ⇒ identical
+    :class:`NaiveSolution`. Distances/durations come from the travel matrix;
+    provenance is echoed, never renamed.
+    """
+    ordered = sweep_visit_order(problem.stops if stops is None else stops)
+    return _simulate_order(problem, ordered, no_forecast_stop_keys, METHOD_NAIVE_SWEEP_ORDER)

@@ -220,13 +220,22 @@ class RoutingConfig:
 
     ``densities_kg_per_litre`` must contain exactly the three observed
     materials (brown/green/white) with positive values.
+
+    v2 determinism protocol (§4.4/§4.7, user-approved 2026-11-14):
+    ``solver_solution_limit`` (int >= 1) is the **primary stopping criterion**
+    — a fixed solution budget with no wall-clock dependence, so repeated
+    solves that reach it return identical results. ``solver_time_limit_s``
+    is a **safety cap only**: if it fires before the solution budget, the
+    solve is reported as ``timeout`` (explicitly non-reproducible, §4.7).
     """
 
     max_shift_minutes: int  # minutes [demo assumption, brief §3 category]
     densities_kg_per_litre: dict[MaterialType, float]  # kg/litre [demo assumption]
     detour_factor: float  # dimensionless >= 1 [demo assumption]
     avg_speed_kmh: float  # km/h [demo assumption]
-    solver_time_limit_s: float  # seconds [demo assumption]
+    # §4.6 v2 defaults (200 solutions / 30.0 s), both [demo assumption].
+    solver_solution_limit: int = 200
+    solver_time_limit_s: float = 30.0
 
     def __post_init__(self) -> None:
         _require_positive_int("RoutingConfig.max_shift_minutes", self.max_shift_minutes)
@@ -246,6 +255,7 @@ class RoutingConfig:
                 f"detour_factor must be a number >= 1, got {self.detour_factor!r}"
             )
         _require_positive_number("RoutingConfig.avg_speed_kmh", self.avg_speed_kmh)
+        _require_positive_int("RoutingConfig.solver_solution_limit", self.solver_solution_limit)
         _require_positive_number("RoutingConfig.solver_time_limit_s", self.solver_time_limit_s)
 
 

@@ -13,7 +13,13 @@ from typing import TypeAlias
 
 from src.data.schema import MaterialType
 from src.routing.fleet import FleetRecommendation
-from src.routing.naive import NaiveRoute, naive_fixed_order_simulation
+from src.routing.naive import (
+    METHOD_NAIVE_SWEEP_ORDER,
+    NaiveRoute,
+    naive_fixed_order_simulation,
+    naive_sweep_simulation,
+    sweep_visit_order,
+)
 from src.routing.schemas import (
     Depot,
     DisposalSite,
@@ -67,12 +73,14 @@ def make_stop(
     fill_pct: float,
     volume_litres: int = 600,
     service_minutes: int = 10,
+    lat: float = 0.0,
+    lon: float = 0.0,
 ) -> Stop:
     return Stop(
         location_id=location_id,
         material_type=material_type,
-        lat=0.0,
-        lon=0.0,
+        lat=lat,
+        lon=lon,
         container_volume_litres=volume_litres,
         predicted_fill_pct=fill_pct,
         service_minutes=service_minutes,
@@ -554,3 +562,66 @@ def test_empty_problem_completes_with_zero_totals() -> None:
     assert solution.fleet_recommendation.basis.ceil_by_weight == 0
     assert isinstance(solution.fleet_recommendation, FleetRecommendation)
     assert solution.no_forecast_stop_keys == []
+
+
+# ---------------------------------------------------------------------------
+# §4.7 area-sweep order (v2): row-major cells, lexicographic within a cell
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_order_visits_cells_row_major_not_by_lon() -> None:
+    # stopA sits in cell (0, 1) — lower lat band; stopB in (1, 0). Row-major
+    # (lat band ascending, then lon ascending) visits stopA first even though
+    # stopB has the smaller longitude.
+    stop_a = make_stop("s-a", "brown", 10.0, lat=0.005, lon=0.015)  # cell (0, 1)
+    stop_b = make_stop("s-b", "brown", 10.0, lat=0.015, lon=0.005)  # cell (1, 0)
+    assert sweep_visit_order([stop_b, stop_a]) == [stop_a, stop_b]
+
+
+def test_sweep_order_is_lexicographic_within_one_cell() -> None:
+    # All three stops share cell (0, 0); inserted deliberately out of order.
+    stops = [
+        make_stop("s3", "brown", 10.0, lat=0.009, lon=0.005),
+        make_stop("s1", "brown", 10.0, lat=0.002, lon=0.003),
+        make_stop("s2", "green", 10.0, lat=0.007, lon=0.001),
+    ]
+    ordered = sweep_visit_order(stops)
+    assert [(s.location_id, s.material_type) for s in ordered] == [
+        ("s1", "brown"),
+        ("s2", "green"),
+        ("s3", "brown"),
+    ]
+
+
+def test_sweep_simulation_uses_sweep_order_and_method_label() -> None:
+    # Three stops in three distinct cells; empty matrix pairs -> an all-zero
+    # matrix (every cell defaults to 0, symmetric, zero diagonal). Fills are
+    # tiny so one truck serves all stops in a single in-shift route.
+    stops = [
+        make_stop("s-b", "brown", 10.0, lat=0.015, lon=0.005),  # cell (1, 0)
+        make_stop("s-a", "green", 10.0, lat=0.005, lon=0.015),  # cell (0, 1)
+        make_stop("s-c", "white", 10.0, lat=0.006, lon=0.003),  # cell (0, 0)
+    ]
+    problem = make_problem(
+        stops,
+        ["depot", "disposal"] + [s.location_id for s in stops],
+        {},  # all-zero distances/durations: order is simulated, not optimised
+    )
+    solution = naive_sweep_simulation(problem)
+
+    assert solution.method == METHOD_NAIVE_SWEEP_ORDER
+    assert solution.method == "naive_sweep_order"
+    assert solution.status == "complete"
+    assert solution.unserved == []
+    visited = [
+        node_id
+        for node_id in sequence_ids(solution.routes[0])
+        if node_id not in ("depot", "disposal")
+    ]
+    expected = [stop_point_id(s) for s in sweep_visit_order(problem.stops)]
+    assert visited == expected
+    assert [s.location_id for s in sweep_visit_order(problem.stops)] == [
+        "s-c",
+        "s-a",
+        "s-b",
+    ]  # row-major: (0,0) -> (0,1) -> (1,0)

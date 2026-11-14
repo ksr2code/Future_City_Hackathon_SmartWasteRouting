@@ -54,43 +54,85 @@ class TestComparison:
         assert comparison_body["target_date"] == TARGET_DATE
         assert comparison_body["method"] == "persistence"
 
-    def test_naive_scenario_shape(self, comparison_body: dict) -> None:
-        naive = comparison_body["naive"]
-        assert naive["method"] == "naive_fixed_order"
-        assert naive["status"] in {"complete", "incomplete"}
-        assert naive["stops_total"] == 5  # all VALID_CSV series, no policy filter
-        assert naive["stops_served"] + naive["unserved_count"] == naive["stops_total"]
-        assert naive["vehicles_available"] == 3  # §4.6 demo_truck count
-        assert naive["vehicles_used"] >= 1
-        assert naive["distance_m"] >= 0
-        assert naive["duration_min"] >= 0
-        assert naive["collected_volume_litres"] > 0
-        assert naive["collected_weight_kg"] > 0
-        assert naive["recommended_trucks"] >= 1
-        assert set(naive["fleet_basis"]) == {"ceil_by_volume", "ceil_by_weight"}
-        # The §5.2.2 selection counts belong to the optimised scenario only.
-        assert "selected_count" not in naive
+    def test_scenarios_in_fixed_contract_order(self, comparison_body: dict) -> None:
+        methods = [scenario["method"] for scenario in comparison_body["scenarios"]]
+        assert methods == ["naive_sweep_all", "naive_sweep_selected", "ortools"]
 
-    def test_optimised_scenario_shape(self, comparison_body: dict) -> None:
-        optimised = comparison_body["optimised"]
-        assert optimised["method"] == "ortools"
-        assert optimised["status"] in {"optimal", "feasible", "infeasible", "timeout"}
-        # At as_of 2026-09-30: 90/80/100 fills selected + overfull-state green;
-        # only loc-a white (40) is skipped below threshold 80 (§3.1 default).
-        assert optimised["selected_count"] == 4
-        assert optimised["skipped_count"] == 1
-        assert optimised["stops_total"] == optimised["selected_count"]
-        assert optimised["stops_served"] + optimised["unserved_count"] == (optimised["stops_total"])
-        assert optimised["vehicles_available"] == 3
-        assert set(optimised["fleet_basis"]) == {"ceil_by_volume", "ceil_by_weight"}
+    def test_sweep_all_scenario_shape(self, comparison_body: dict) -> None:
+        sweep_all = comparison_body["scenarios"][0]
+        assert sweep_all["status"] in {"complete", "incomplete"}
+        assert sweep_all["stops_total"] == 5  # all VALID_CSV series, no policy filter
+        assert sweep_all["stops_served"] + sweep_all["unserved_count"] == (sweep_all["stops_total"])
+        assert sweep_all["vehicles_available"] == 3  # §4.6 demo_truck count
+        assert sweep_all["vehicles_used"] >= 1
+        assert sweep_all["distance_m"] >= 0
+        assert sweep_all["duration_min"] >= 0
+        assert sweep_all["collected_volume_litres"] > 0
+        assert sweep_all["collected_weight_kg"] > 0
+        assert sweep_all["recommended_trucks"] >= 1
+        assert set(sweep_all["fleet_basis"]) == {"ceil_by_volume", "ceil_by_weight"}
+        # §5.2.2: selection counts are not part of scenario rows at all.
+        assert "selected_count" not in sweep_all
+        assert "skipped_count" not in sweep_all
+
+    def test_sweep_selected_matches_the_optimised_selection(self, comparison_body: dict) -> None:
+        scenarios = comparison_body["scenarios"]
+        sweep_selected, ortools = scenarios[1], scenarios[2]
+        # Selection is deterministic: the median optimised run selected
+        # loc-a brown/green/white fills 90/80/100 + the overfull green; only
+        # loc-a white (40) is skipped below threshold 80 (§3.1 default).
+        assert sweep_selected["stops_total"] == ortools["stops_total"] == 4
+        assert (
+            sweep_selected["stops_served"] + sweep_selected["unserved_count"]
+            == (sweep_selected["stops_total"])
+        )
+        assert ortools["status"] in {"optimal", "feasible", "infeasible", "timeout"}
+        assert ortools["stops_served"] + ortools["unserved_count"] == ortools["stops_total"]
+        assert ortools["vehicles_available"] == 3
+
+    def test_per_stop_and_per_kg_metrics_match_rows(self, comparison_body: dict) -> None:
+        for scenario in comparison_body["scenarios"]:
+            if scenario["stops_served"] > 0:
+                assert scenario["distance_per_stop_m"] == round(
+                    scenario["distance_m"] / scenario["stops_served"], 1
+                )
+            else:
+                assert scenario["distance_per_stop_m"] is None  # never fabricated
+            if scenario["collected_weight_kg"] > 0:
+                assert scenario["distance_per_kg_m"] == round(
+                    scenario["distance_m"] / scenario["collected_weight_kg"], 1
+                )
+            else:
+                assert scenario["distance_per_kg_m"] is None
+
+    def test_gains_decompose_the_scenario_distances(self, comparison_body: dict) -> None:
+        sweep_all, sweep_selected, ortools = comparison_body["scenarios"]
+        gains = comparison_body["gains"]
+        assert gains["selection_gain_m"] == (sweep_all["distance_m"] - sweep_selected["distance_m"])
+        if ortools["status"] in {"optimal", "feasible"}:
+            assert gains["routing_gain_m"] == (sweep_selected["distance_m"] - ortools["distance_m"])
+            assert gains["total_gain_m"] == (gains["selection_gain_m"] + gains["routing_gain_m"])
+        else:
+            # No usable optimised solution ⇒ null gains, never against 0 (§5.2.2).
+            assert gains["routing_gain_m"] is None
+            assert gains["total_gain_m"] is None
+
+    def test_optimised_determinism_reports_the_protocol(self, comparison_body: dict) -> None:
+        det = comparison_body["optimised_determinism"]
+        assert det["runs"] == 5  # §4.7 [demo assumption]
+        assert det["mode"] in {"identical", "median_of_runs"}
+        assert det["distance_m_min"] <= det["distance_m_median"] <= det["distance_m_max"]
+        if det["mode"] == "identical":
+            assert det["distance_m_min"] == det["distance_m_max"]
 
     def test_provenance_and_assumption_labels(self, comparison_body: dict) -> None:
         assert comparison_body["distance_provenance"] == "haversine_straight_line_derived"
         assumptions = comparison_body["assumptions"]
         assert assumptions
         assert any("[demo assumption]" in label for label in assumptions)
-        assert any("run-to-run" in label for label in assumptions)  # GLS note, §5.2.2
-        assert any("lexicographic" in label for label in assumptions)  # naive order
+        assert any("solution budget" in label for label in assumptions)  # §4.7 note
+        assert any("area sweep" in label for label in assumptions)  # naive order
+        assert any("lexicographic" in label for label in assumptions)  # within-cell order
 
 
 class TestDemoDataset:

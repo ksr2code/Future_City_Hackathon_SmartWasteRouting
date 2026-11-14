@@ -15,6 +15,7 @@ assumption]" in responses — never presented as an observed fact.
 
 from __future__ import annotations
 
+import statistics
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -64,7 +65,11 @@ from src.routing.geography import (
     build_travel_matrix,
     synthetic_stop_coordinates,
 )
-from src.routing.naive import NaiveSolution, naive_fixed_order_simulation
+from src.routing.naive import (
+    SWEEP_CELL_SIZE_DEG,
+    NaiveSolution,
+    naive_sweep_simulation,
+)
 from src.routing.schemas import (
     Depot,
     DisposalSite,
@@ -90,12 +95,16 @@ COMPARISON_AS_OF_DEFAULT = date(2026, 9, 30)
 
 COMPARISON_HORIZON_DAYS_DEFAULT = 28  # days [demo assumption — observed median gap]
 
-GLS_NOTE = (
-    "Optimised totals vary slightly run-to-run: GUIDED LOCAL SEARCH runs under the "
-    "configured wall-clock solver time limit (contract §4.4 claims determinism as "
-    "same status + same invariants, not bitwise). The naive simulation is fully "
-    "deterministic."
+DETERMINISM_NOTE = (
+    "Optimised scenario: OR-Tools stops on a fixed solution budget "
+    "(solver_solution_limit) — repeated solves that reach the budget return "
+    "identical totals.distance_m (contract §4.4/§4.7). The wall-clock "
+    "solver_time_limit_s is a safety cap only: a run it stops before the "
+    "budget is reported with status timeout and is explicitly not "
+    "reproducible. The naive simulations are fully deterministic."
 )
+
+COMPARISON_RUNS = 5  # §4.7 repetition protocol [demo assumption]
 
 
 # --- Datasets (§5.1 POST /api/datasets, GET /api/summary, /api/containers) ---
@@ -261,6 +270,7 @@ def config_defaults() -> schemas.ConfigDefaultsResponse:
             max_shift_minutes=routing.max_shift_minutes,
             avg_speed_kmh=routing.avg_speed_kmh,
             detour_factor=routing.detour_factor,
+            solver_solution_limit=routing.solver_solution_limit,
             solver_time_limit_s=routing.solver_time_limit_s,
         ),
         assumption_fields=[
@@ -547,6 +557,11 @@ def _effective_routing(
             if overrides.avg_speed_kmh is not None
             else base_config.avg_speed_kmh
         ),
+        solver_solution_limit=(
+            overrides.solver_solution_limit
+            if overrides.solver_solution_limit is not None
+            else base_config.solver_solution_limit
+        ),
         solver_time_limit_s=(
             overrides.solver_time_limit_s
             if overrides.solver_time_limit_s is not None
@@ -717,7 +732,10 @@ def _assumption_labels(
         f"{ASSUMPTION_LABEL} max_shift_minutes={config.max_shift_minutes}",
         f"{ASSUMPTION_LABEL} avg_speed_kmh={config.avg_speed_kmh}, "
         f"detour_factor={config.detour_factor} (matrix derivation)",
-        f"{ASSUMPTION_LABEL} solver_time_limit_s={config.solver_time_limit_s}",
+        f"{ASSUMPTION_LABEL} solver_solution_limit={config.solver_solution_limit} "
+        "(primary stopping criterion, deterministic; §4.7)",
+        f"{ASSUMPTION_LABEL} solver_time_limit_s={config.solver_time_limit_s} "
+        "(safety cap only; fires ⇒ status timeout, run not reproducible; §4.7)",
     ]
 
 
@@ -725,48 +743,30 @@ def _assumption_labels(
 
 
 @dataclass(frozen=True)
-class ComparisonScenarios:
-    """Both §5.2.2 scenario outputs on one dataset (the rendered markdown and
-    the ComparisonResponse are built from the very same objects)."""
+class ComparisonRun:
+    """Everything the §5.2.2 v2 ComparisonResponse and the M12 CLI markdown
+    are built from — ONE shared core (CLI + endpoint, §5.2.2)."""
 
-    naive: NaiveSolution
-    optimised: schemas.RouteResponse
-
-
-def run_comparison_scenarios(
-    dataset: Dataset,
-    as_of: date,
-    horizon_days: int,
-) -> ComparisonScenarios:
-    """Shared comparison core (M12 CLI ``compare_demo`` and GET
-    /api/comparison): the optimised scenario runs the unchanged ``run_route``
-    pipeline on the active store dataset, the naive scenario simulates all
-    series in fixed lexicographic order over the same §4.6 demo inputs.
-
-    ``dataset`` must be the active store dataset (the CLI uploads it first;
-    the endpoint has it loaded) because ``run_route`` reads the store.
-    """
-    optimised = run_route(
-        schemas.RouteRequest(
-            as_of_date=as_of,
-            horizon_days=horizon_days,
-            method=METHOD_PERSISTENCE,
-        )
-    )
-    problem, no_forecast_keys = _naive_problem(dataset, as_of, horizon_days)
-    naive = naive_fixed_order_simulation(problem, no_forecast_keys)
-    return ComparisonScenarios(naive=naive, optimised=optimised)
+    as_of_date: date
+    target_date: date
+    horizon_days: int
+    sweep_all: NaiveSolution
+    sweep_selected: NaiveSolution
+    optimised_median: schemas.RouteResponse  # run whose distance is the median
+    scenarios: list[schemas.ComparisonScenarioResponse]
+    gains: schemas.ComparisonGainsResponse
+    optimised_determinism: schemas.OptimisedDeterminismResponse
+    distance_provenance: str
+    assumptions: list[str]
 
 
-def _naive_problem(
+def _forecast_fills(
     dataset: Dataset, as_of: date, horizon_days: int
-) -> tuple[RoutingProblem, list[SeriesKey]]:
-    """Build the §4.6 demo routing problem over **all** dataset series.
-
-    Persistence fills (§2.3) mirror the ``run_route`` forecast step exactly
-    (leakage-safe features at as_of); series without a persistence value keep
-    fill 0.0 and are returned separately so the simulation can label them.
-    """
+) -> tuple[dict[SeriesKey, float], list[SeriesKey]]:
+    """Persistence fills (§2.3) for every series — mirrors the ``run_route``
+    forecast step exactly (leakage-safe features at as_of); series without a
+    persistence value keep fill 0.0 and are listed in ``no_forecast_keys`` so
+    the simulations can label them (never fabricated)."""
     grouped = group_by_series(dataset.readings)
     target_date = as_of + timedelta(days=horizon_days)
     fills: dict[SeriesKey, float] = {}
@@ -791,7 +791,20 @@ def _naive_problem(
             fills[key] = 0.0
         else:
             fills[key] = record.predicted_fill_pct
+    return fills, no_forecast_keys
 
+
+def _problem_for_keys(
+    fills: dict[SeriesKey, float],
+    no_forecast_keys: Sequence[SeriesKey],
+    keys: Sequence[SeriesKey],
+) -> tuple[RoutingProblem, list[SeriesKey]]:
+    """Build the §4.6 demo routing problem over exactly ``keys`` (all series
+    for ``naive_sweep_all``, policy-selected only for ``naive_sweep_selected``).
+    Same demo depot/disposal/vehicle/config values and the same synthetic
+    coordinate derivation as the optimised pipeline — one labelled demo
+    physics across scenarios (§4.7). Returns the no-forecast keys within
+    ``keys`` for the zero-fill labelling."""
     depot = demo_depot()
     disposal = demo_disposal_site()
     vehicle = demo_vehicle_type()
@@ -807,7 +820,7 @@ def _naive_problem(
             predicted_fill_pct=fills[key],
             service_minutes=DEMO_STOP_SERVICE_MINUTES,
         )
-        for key in sorted(fills)
+        for key in sorted(keys)
     ]
     travel = build_travel_matrix(depot, [disposal], stops, config)
     problem = RoutingProblem(
@@ -818,33 +831,97 @@ def _naive_problem(
         travel=travel,
         config=config,
     )
-    return problem, no_forecast_keys
+    no_forecast_set = set(no_forecast_keys)
+    return problem, [key for key in sorted(keys) if key in no_forecast_set]
 
 
-def comparison() -> schemas.ComparisonResponse:
-    """§5.2.2 ComparisonResponse on the active dataset with the v1 fixed
-    defaults echoed (as_of 2026-09-30, horizon 28, persistence)."""
-    scenarios = run_comparison_scenarios(
-        store.dataset,
-        COMPARISON_AS_OF_DEFAULT,
-        COMPARISON_HORIZON_DAYS_DEFAULT,
+def run_comparison(
+    dataset: Dataset,
+    as_of: date,
+    horizon_days: int,
+    runs: int = COMPARISON_RUNS,
+) -> ComparisonRun:
+    """Shared comparison core (M12 CLI ``compare_demo`` and GET
+    /api/comparison) per contract §4.7 v2: three scenarios in fixed order
+    (``naive_sweep_all``, ``naive_sweep_selected``, ``ortools``), gain
+    decomposition, and the §4.7 repetition protocol (``runs`` optimised
+    solves; the median run is the value used in UI and docs).
+
+    ``dataset`` must be the active store dataset (the CLI uploads it first;
+    the endpoint has it loaded) because ``run_route`` reads the store.
+    """
+    if runs < 1:
+        raise ValueError(f"runs must be >= 1, got {runs}")
+
+    # Optimised scenario: the unchanged M10 ``run_route`` pipeline, solved
+    # ``runs`` times for the §4.7 repetition protocol. The run whose distance
+    # is the median carries the whole ``ortools`` row (self-consistent row;
+    # its distance IS the §4.7 median for the odd default runs=5).
+    optimised_runs = [
+        run_route(
+            schemas.RouteRequest(
+                as_of_date=as_of,
+                horizon_days=horizon_days,
+                method=METHOD_PERSISTENCE,
+            )
+        )
+        for _ in range(runs)
+    ]
+    optimised_median = sorted(
+        optimised_runs, key=lambda response: response.solution.totals.distance_m
+    )[runs // 2]
+
+    # Naive scenarios: identical simulation physics, area-sweep order (§4.7).
+    fills, no_forecast_keys = _forecast_fills(dataset, as_of, horizon_days)
+    all_keys = sorted(fills)
+    selected_keys = sorted(
+        (candidate.location_id, candidate.material_type)
+        for candidate in optimised_median.selection.selected
     )
-    optimised = scenarios.optimised
-    return schemas.ComparisonResponse(
-        as_of_date=COMPARISON_AS_OF_DEFAULT,
-        target_date=COMPARISON_AS_OF_DEFAULT + timedelta(days=COMPARISON_HORIZON_DAYS_DEFAULT),
-        horizon_days=COMPARISON_HORIZON_DAYS_DEFAULT,
-        method=METHOD_PERSISTENCE,
-        naive=_naive_scenario(scenarios.naive),
-        optimised=_optimised_scenario(optimised),
-        distance_provenance=optimised.solution.distance_provenance,
-        assumptions=_comparison_assumptions(optimised),
+    problem_all, no_forecast_all = _problem_for_keys(fills, no_forecast_keys, all_keys)
+    sweep_all = naive_sweep_simulation(problem_all, no_forecast_all)
+    problem_selected, no_forecast_selected = _problem_for_keys(
+        fills, no_forecast_keys, selected_keys
+    )
+    sweep_selected = naive_sweep_simulation(problem_selected, no_forecast_selected)
+
+    scenarios = [
+        _naive_scenario_row("naive_sweep_all", sweep_all),
+        _naive_scenario_row("naive_sweep_selected", sweep_selected),
+        _ortools_scenario_row(optimised_median),
+    ]
+    gains = _comparison_gains(scenarios, optimised_median)
+    determinism = _optimised_determinism(optimised_runs)
+
+    return ComparisonRun(
+        as_of_date=as_of,
+        target_date=as_of + timedelta(days=horizon_days),
+        horizon_days=horizon_days,
+        sweep_all=sweep_all,
+        sweep_selected=sweep_selected,
+        optimised_median=optimised_median,
+        scenarios=scenarios,
+        gains=gains,
+        optimised_determinism=determinism,
+        distance_provenance=optimised_median.solution.distance_provenance,
+        assumptions=_comparison_assumptions(optimised_median),
     )
 
 
-def _naive_scenario(naive: NaiveSolution) -> schemas.ComparisonScenarioResponse:
+def _ratio_1dp(distance_m: int, denominator: int) -> float | None:
+    """§5.2.2 per-stop/per-kg metric at 1 d.p.; ``None`` on a zero
+    denominator (e.g. fleet exhausted before any stop) — never a fabricated
+    0-division value."""
+    if denominator == 0:
+        return None
+    return round(distance_m / denominator, 1)
+
+
+def _naive_scenario_row(
+    method: schemas.ComparisonMethod, naive: NaiveSolution
+) -> schemas.ComparisonScenarioResponse:
     return schemas.ComparisonScenarioResponse(
-        method="naive_fixed_order",
+        method=method,
         status=naive.status,
         distance_m=naive.totals.distance_m,
         duration_min=naive.totals.duration_min,
@@ -860,14 +937,16 @@ def _naive_scenario(naive: NaiveSolution) -> schemas.ComparisonScenarioResponse:
             ceil_by_volume=naive.fleet_recommendation.basis.ceil_by_volume,
             ceil_by_weight=naive.fleet_recommendation.basis.ceil_by_weight,
         ),
+        distance_per_stop_m=_ratio_1dp(naive.totals.distance_m, naive.totals.stops_served),
+        distance_per_kg_m=_ratio_1dp(naive.totals.distance_m, naive.totals.collected_weight_kg),
     )
 
 
-def _optimised_scenario(
+def _ortools_scenario_row(
     optimised: schemas.RouteResponse,
-) -> schemas.OptimisedScenarioResponse:
+) -> schemas.ComparisonScenarioResponse:
     solution = optimised.solution
-    return schemas.OptimisedScenarioResponse(
+    return schemas.ComparisonScenarioResponse(
         method="ortools",
         status=solution.status,
         distance_m=solution.totals.distance_m,
@@ -881,19 +960,78 @@ def _optimised_scenario(
         unserved_count=len(solution.unserved),
         recommended_trucks=solution.fleet_recommendation.count,
         fleet_basis=solution.fleet_recommendation.basis.model_copy(),
-        selected_count=len(optimised.selection.selected),
-        skipped_count=len(optimised.selection.skipped),
+        distance_per_stop_m=_ratio_1dp(solution.totals.distance_m, solution.totals.stops_served),
+        distance_per_kg_m=_ratio_1dp(
+            solution.totals.distance_m, solution.totals.collected_weight_kg
+        ),
+    )
+
+
+def _comparison_gains(
+    scenarios: list[schemas.ComparisonScenarioResponse], optimised: schemas.RouteResponse
+) -> schemas.ComparisonGainsResponse:
+    """§4.7 gain decomposition in metres. ``routing_gain_m``/``total_gain_m``
+    are ``None`` when the optimised scenario has no usable solution
+    (infeasible/timeout): a gain against 0 would be fabricated, §5.2.2."""
+    sweep_all, sweep_selected, optimised_row = scenarios
+    selection_gain = sweep_all.distance_m - sweep_selected.distance_m
+    usable = optimised.solution.status in ("optimal", "feasible")
+    routing_gain = sweep_selected.distance_m - optimised_row.distance_m if usable else None
+    total_gain = selection_gain + routing_gain if routing_gain is not None else None
+    return schemas.ComparisonGainsResponse(
+        selection_gain_m=selection_gain,
+        routing_gain_m=routing_gain,
+        total_gain_m=total_gain,
+    )
+
+
+def _optimised_determinism(
+    optimised_runs: list[schemas.RouteResponse],
+) -> schemas.OptimisedDeterminismResponse:
+    """§4.7 repetition protocol: ``mode`` is ``"identical"`` iff min == max
+    (deterministic solution-limit stop); otherwise ``"median_of_runs"`` —
+    wall-clock variance was observed, reported, never hidden."""
+    distances = sorted(response.solution.totals.distance_m for response in optimised_runs)
+    minimum, maximum = distances[0], distances[-1]
+    return schemas.OptimisedDeterminismResponse(
+        runs=len(optimised_runs),
+        mode="identical" if minimum == maximum else "median_of_runs",
+        distance_m_median=float(statistics.median(distances)),
+        distance_m_min=minimum,
+        distance_m_max=maximum,
+    )
+
+
+def comparison() -> schemas.ComparisonResponse:
+    """§5.2.2 v2 ComparisonResponse on the active dataset with the fixed
+    defaults echoed (as_of 2026-09-30, horizon 28, persistence)."""
+    run = run_comparison(
+        store.dataset,
+        COMPARISON_AS_OF_DEFAULT,
+        COMPARISON_HORIZON_DAYS_DEFAULT,
+    )
+    return schemas.ComparisonResponse(
+        as_of_date=run.as_of_date,
+        target_date=run.target_date,
+        horizon_days=run.horizon_days,
+        method=METHOD_PERSISTENCE,
+        scenarios=run.scenarios,
+        gains=run.gains,
+        optimised_determinism=run.optimised_determinism,
+        distance_provenance=run.distance_provenance,
+        assumptions=run.assumptions,
     )
 
 
 def _comparison_assumptions(optimised: schemas.RouteResponse) -> list[str]:
     """§5.2.2 assumption labels: the optimised pipeline labels plus the naive
-    order/zero-fill rules and the GLS run-variance note (contract §5.2.2)."""
+    area-sweep order/zero-fill rules and the §4.7 determinism protocol note."""
     return [
         *optimised.assumptions,
-        f"{ASSUMPTION_LABEL} naive visiting order is fixed lexicographic "
-        "(location_id, material_type) — the data has no area field",
+        f"{ASSUMPTION_LABEL} naive visiting order is the §4.7 area sweep: "
+        f"grid cells of SWEEP_CELL_SIZE_DEG={SWEEP_CELL_SIZE_DEG}° (~1 km), "
+        "row-major, lexicographic within a cell — the data has no area field",
         f"{ASSUMPTION_LABEL} naive zero-fill rule: series without a persistence "
         "value at as_of are still visited and collect 0 L / 0 kg",
-        GLS_NOTE,
+        DETERMINISM_NOTE,
     ]

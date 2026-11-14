@@ -111,6 +111,7 @@ class RoutingDefaults(BaseModel):
     max_shift_minutes: int
     avg_speed_kmh: float
     detour_factor: float
+    solver_solution_limit: int
     solver_time_limit_s: float
 
 
@@ -230,6 +231,7 @@ class RoutingConfigOverrides(BaseModel):
     max_shift_minutes: int | None = None
     avg_speed_kmh: float | None = None
     detour_factor: float | None = None
+    solver_solution_limit: int | None = None
     solver_time_limit_s: float | None = None
 
 
@@ -329,14 +331,21 @@ class RouteResponse(BaseModel):
     assumptions: list[str]
 
 
-# --- Comparison (§5.1 GET /api/comparison; §5.2.2 shapes) --------------------
+# --- Comparison (§5.1 GET /api/comparison; §5.2.2 shapes, v2 2026-11-14) -----
+
+
+ComparisonMethod = Literal["naive_sweep_all", "naive_sweep_selected", "ortools"]
+"""§4.7 scenario ids, in the fixed scenarios-array order."""
 
 
 class ComparisonScenarioResponse(BaseModel):
-    """§5.2.2 one comparison scenario (naive fixed-order or optimised)."""
+    """§5.2.2 one comparison scenario (naive area sweep or OR-Tools optimised).
 
-    method: Literal["naive_fixed_order", "ortools"]
-    status: str  # naive: complete|incomplete; optimised: §4.3 solver status
+    Per-stop/per-kg metrics are ``null`` on zero denominators (e.g. fleet
+    exhausted before any stop) — never a fabricated 0-division value."""
+
+    method: ComparisonMethod
+    status: str  # naive: complete|incomplete; ortools: §4.3 solver status
     distance_m: int
     duration_min: int
     stops_served: int
@@ -348,25 +357,45 @@ class ComparisonScenarioResponse(BaseModel):
     unserved_count: int
     recommended_trucks: int
     fleet_basis: FleetBasisResponse
+    distance_per_stop_m: float | None  # distance_m / stops_served, 1 d.p.
+    distance_per_kg_m: float | None  # distance_m / collected_weight_kg, 1 d.p.
 
 
-class OptimisedScenarioResponse(ComparisonScenarioResponse):
-    """§5.2.2 optimised scenario plus the §3 selection sizes it routed."""
+class ComparisonGainsResponse(BaseModel):
+    """§4.7 gain decomposition (metres). ``routing_gain_m``/``total_gain_m``
+    are ``null`` when the optimised scenario has no usable solution
+    (infeasible/timeout) — a gain against 0 would be fabricated."""
 
-    selected_count: int
-    skipped_count: int
+    selection_gain_m: int | None  # naive_sweep_all - naive_sweep_selected
+    routing_gain_m: int | None  # naive_sweep_selected - ortools (median)
+    total_gain_m: int | None
+
+
+class OptimisedDeterminismResponse(BaseModel):
+    """§4.7 repetition protocol over ``runs`` optimised solves: ``mode`` is
+    ``"identical"`` iff min == max (deterministic solution-limit stop);
+    otherwise ``"median_of_runs"`` — the median is the value used in the UI
+    and docs. A ``median_of_runs`` outcome means wall-clock variance was
+    observed (safety cap or early exhaust), reported, never hidden."""
+
+    runs: int
+    mode: Literal["identical", "median_of_runs"]
+    distance_m_median: float
+    distance_m_min: int
+    distance_m_max: int
 
 
 class ComparisonResponse(BaseModel):
-    """§5.2.2 naive-vs-optimised comparison; v1 uses the fixed CLI defaults
-    (as_of 2026-09-30, horizon 28) and echoes them. Optimised totals vary
-    slightly run-to-run (GLS wall-clock limit, §4.4) — noted in assumptions."""
+    """§5.2.2 v2 scenario comparison with gain decomposition; fixed CLI
+    defaults (as_of 2026-09-30, horizon 28, persistence) echoed. Distances
+    are haversine_straight_line_derived — never called road distance."""
 
     as_of_date: date
     target_date: date
     horizon_days: int
     method: Literal["persistence"]
-    naive: ComparisonScenarioResponse
-    optimised: OptimisedScenarioResponse
-    distance_provenance: str  # never presented as road distance (§4.2)
+    scenarios: list[ComparisonScenarioResponse]  # §4.7 ids, fixed order
+    gains: ComparisonGainsResponse
+    optimised_determinism: OptimisedDeterminismResponse
+    distance_provenance: str
     assumptions: list[str]

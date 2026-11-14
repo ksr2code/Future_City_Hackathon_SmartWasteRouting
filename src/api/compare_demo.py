@@ -1,32 +1,36 @@
-"""M12 demo comparison CLI — naive fixed-order vs OR-Tools optimised.
+"""M12 demo comparison CLI — §4.7 gain-decomposition scenarios (v2).
 
-Runs both scenarios on the challenge dataset with the agreed §4.6 demo
-pipeline and writes ``docs/demo_numbers.md``:
+Runs the agreed §4.6 demo pipeline on the challenge dataset and writes
+``docs/demo_numbers.md``:
 
     python -m src.api.compare_demo
 
-Lives in the API layer (AGENTS boundaries): both scenarios run in the shared
-core ``src.api.services.run_comparison_scenarios`` — the M10 ``run_route``
-pipeline reused **exactly** (persistence forecast §2.3, as_of 2026-09-30,
-horizon_days 28 [demo assumption], default ``PolicyConfig`` §3.1, synthetic
-demo geography §4.5 and §4.6 demo config, solved by ``src.routing.solver
-.solve``) plus the naive scenario from ``src.routing.naive`` — which also
-powers GET /api/comparison (§5.2.2). This module is CLI glue: upload, the
-markdown rendering below, and argparse.
+Lives in the API layer (AGENTS boundaries): everything is computed by the ONE
+shared core ``src.api.services.run_comparison`` — the same function behind
+GET /api/comparison (§5.2.2) — reusing the M10 ``run_route`` pipeline exactly
+(persistence forecast §2.3, as_of 2026-09-30, horizon_days 28 [demo
+assumption], default ``PolicyConfig`` §3.1, synthetic demo geography §4.5 and
+§4.6 demo config, solved ``runs`` times by ``src.routing.solver.solve``) plus
+the two naive area-sweep scenarios from ``src.routing.naive``. This module is
+CLI glue only: upload, the markdown rendering below, and argparse.
 
-Naive scenario: the **same demo inputs** (same depot/disposal/vehicle/config
-values, same synthetic-coordinate derivation) but over **ALL** dataset series
-— no policy filter — simulated by ``src.routing.naive`` in fixed lexicographic
-(location_id, material_type) order [demo assumption — the data has no area
-field]. Series without a persistence value at as_of (§2.3) are still visited
-and collect 0 L / 0 kg, labelled.
+The three §4.7 scenarios, in the fixed array order:
+- ``naive_sweep_all``: ALL dataset series — no policy filter — simulated by
+  ``src.routing.naive`` in the §4.7 area-sweep order (grid cells of
+  ``SWEEP_CELL_SIZE_DEG`` ≈ 1 km [demo assumption], row-major, lexicographic
+  within a cell) [demo assumption — the data has no area field]. Series
+  without a persistence value at as_of (§2.3) are still visited and collect
+  0 L / 0 kg, labelled.
+- ``naive_sweep_selected``: the same sweep over policy-selected series only
+  (gain reference).
+- ``ortools``: the §4.7 median of ``runs`` optimised solves (selection counts
+  from that median run's policy selection).
 
 Every number in the generated document is labelled observed / predicted /
 [demo assumption]; distances are haversine_straight_line_derived (detour
 factor applied) and are **never** called road distance (contract §4.2, AGENTS
-rule 9). Optimised totals vary slightly run-to-run — GLS under a wall-clock
-solver time limit (contract §4.4); the naive simulation is fully
-deterministic.
+rule 9). Per-stop/per-kg metrics are null on zero denominators — never a
+fabricated 0-division value (§5.2.2).
 """
 
 from __future__ import annotations
@@ -43,13 +47,13 @@ from src.api.services import (
     COMPARISON_AS_OF_DEFAULT,
     COMPARISON_HORIZON_DAYS_DEFAULT,
     DEMO_CSV_PATH,
-    GLS_NOTE,
-    run_comparison_scenarios,
+    DETERMINISM_NOTE,
+    ComparisonRun,
     upload_dataset,
 )
-from src.routing.demo_config import DEMO_VEHICLE_COUNT_AVAILABLE, demo_vehicle_type
-from src.routing.fleet import FleetRecommendation
-from src.routing.naive import NaiveSolution
+from src.api.services import run_comparison as run_comparison_core
+from src.routing.demo_config import demo_vehicle_type
+from src.routing.naive import SWEEP_CELL_SIZE_DEG, NaiveSolution
 
 # CLI-facing names for the single server-side/API shared constants (§5.1/§5.2.2);
 # kept as module attributes so argparse defaults and external references
@@ -64,6 +68,16 @@ DETOUR_NOTE = (
     'distance" — no road network data exists [observed]'
 )
 
+SCENARIO_HEADINGS: dict[str, str] = {
+    "naive_sweep_all": (
+        "Scenario 1 — naive_sweep_all (ALL series, no policy filter, naive area-sweep order)"
+    ),
+    "naive_sweep_selected": (
+        "Scenario 2 — naive_sweep_selected (policy-selected series only, same area-sweep order)"
+    ),
+    "ortools": "Scenario 3 — ortools (OR-Tools CVRP, `src.routing.solver.solve`)",
+}
+
 
 class CompareDemoError(RuntimeError):
     """Raised when the comparison inputs are unusable (dataset validation
@@ -72,7 +86,7 @@ class CompareDemoError(RuntimeError):
 
 @dataclass(frozen=True)
 class ComparisonResult:
-    """Both scenario solutions plus the rendered markdown document."""
+    """The §4.7 comparison run plus the rendered markdown document."""
 
     csv_path: Path
     output_path: Path
@@ -83,8 +97,7 @@ class ComparisonResult:
     n_series: int
     date_min: date | None
     date_max: date | None
-    naive: NaiveSolution
-    optimised: api_schemas.RouteResponse
+    run: ComparisonRun
     markdown: str
 
 
@@ -94,13 +107,13 @@ def run_comparison(
     as_of: date = DEFAULT_AS_OF,
     horizon_days: int = DEFAULT_HORIZON_DAYS,
 ) -> ComparisonResult:
-    """Run both scenarios on ``csv_path`` and render the markdown document.
+    """Run the §4.7 comparison on ``csv_path`` and render the markdown document.
 
-    The scenarios run in the shared core ``services
-    .run_comparison_scenarios`` (also powering GET /api/comparison, §5.2.2):
-    the optimised scenario reuses the M10 pipeline untouched (upload →
-    ``run_route`` on the active store dataset); the naive scenario shares the
-    same demo config values and coordinate derivation over all series.
+    Everything is computed by the shared core ``services.run_comparison``
+    (also powering GET /api/comparison, §5.2.2): the optimised scenario
+    reuses the M10 pipeline untouched (upload → ``run_route`` on the active
+    store dataset, ``runs`` solves, median run); the two naive scenarios
+    share the same demo config values and coordinate derivation (§4.7).
     """
     load_result = upload_dataset(csv_path.read_bytes(), csv_path.name)
     if load_result.errors:
@@ -110,9 +123,7 @@ def run_comparison(
         )
     summary = load_result.dataset.summary
 
-    scenarios = run_comparison_scenarios(load_result.dataset, as_of, horizon_days)
-    naive = scenarios.naive
-    optimised = scenarios.optimised
+    run = run_comparison_core(load_result.dataset, as_of, horizon_days)
 
     markdown = _render_markdown(
         csv_path=csv_path,
@@ -124,8 +135,7 @@ def run_comparison(
         n_series=summary.n_series,
         date_min=summary.date_min,
         date_max=summary.date_max,
-        naive=naive,
-        optimised=optimised,
+        run=run,
     )
     return ComparisonResult(
         csv_path=csv_path,
@@ -137,48 +147,97 @@ def run_comparison(
         n_series=summary.n_series,
         date_min=summary.date_min,
         date_max=summary.date_max,
-        naive=naive,
-        optimised=optimised,
+        run=run,
         markdown=markdown,
     )
 
 
-def _fleet_line(recommendation: api_schemas.FleetRecommendationResponse) -> str:
-    basis = recommendation.basis
-    return (
-        f"{recommendation.vehicle_type_id} x {recommendation.count} "
-        f"(ceil_by_volume {basis.ceil_by_volume}, ceil_by_weight {basis.ceil_by_weight})"
-    )
+def _ratio(value: float | None) -> str:
+    """Null-aware per-stop/per-kg cell (§5.2.2: never a fabricated value)."""
+    if value is None:
+        return "null (zero denominator — not fabricated, §5.2.2)"
+    return str(value)
 
 
-def _scenario_table(
-    status: str,
-    distance_m: int,
-    duration_min: int,
-    stops_served: int,
-    stops_total: int,
-    vehicles_used: int,
-    collected_volume_litres: int,
-    collected_weight_kg: int,
-    unserved_count: int,
-    fleet_recommendation: api_schemas.FleetRecommendationResponse,
-) -> list[str]:
-    """The shared §4.3-key metric rows for one scenario table."""
-    vehicle = demo_vehicle_type()  # id/count from the §4.6 config, never literals
+def _median_number(value: float) -> str:
+    """Render the determinism median without a spurious ``.0`` (the value is
+    the median of integer distances; a half-integer stays explicit)."""
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def _scenario_table(row: api_schemas.ComparisonScenarioResponse) -> list[str]:
+    """The §4.7-key metric rows for one scenario, from the shared core row."""
+    vehicle = demo_vehicle_type()  # id from the §4.6 config, never literals
     return [
         "| metric | value |",
         "|---|---|",
-        f"| status | {status} |",
-        f"| total distance_m | {distance_m} (haversine_straight_line_derived) |",
-        f"| total duration_min | {duration_min} |",
-        f"| stops visited | {stops_served} / {stops_total} |",
-        f"| vehicles available | {DEMO_VEHICLE_COUNT_AVAILABLE} x {vehicle.id} "
-        "[demo assumption §4.6] |",
-        f"| vehicles used | {vehicles_used} |",
-        f"| collected volume litres | {collected_volume_litres} |",
-        f"| collected weight kg | {collected_weight_kg} |",
-        f"| unserved stops | {unserved_count} (each with a reason in the solution) |",
-        f"| fleet recommendation | {_fleet_line(fleet_recommendation)} |",
+        f"| status | {row.status} |",
+        f"| total distance_m | {row.distance_m} (haversine_straight_line_derived) |",
+        f"| total duration_min | {row.duration_min} |",
+        f"| stops visited | {row.stops_served} / {row.stops_total} |",
+        f"| vehicles available | {row.vehicles_available} x {vehicle.id} [demo assumption §4.6] |",
+        f"| vehicles used | {row.vehicles_used} |",
+        f"| collected volume litres | {row.collected_volume_litres} |",
+        f"| collected weight kg | {row.collected_weight_kg} |",
+        f"| unserved stops | {row.unserved_count} (each with a reason in the solution) |",
+        f"| fleet recommendation | {row.recommended_trucks} x {vehicle.id} "
+        f"(ceil_by_volume {row.fleet_basis.ceil_by_volume}, "
+        f"ceil_by_weight {row.fleet_basis.ceil_by_weight}) |",
+        f"| distance per stop served (m) | {_ratio(row.distance_per_stop_m)} |",
+        f"| distance per collected kg (m) | {_ratio(row.distance_per_kg_m)} |",
+    ]
+
+
+def _sweep_lines(sweep: NaiveSolution, row: api_schemas.ComparisonScenarioResponse) -> list[str]:
+    """Zero-fill and shift labelling for one naive sweep (contract §2.3/§4.4)."""
+    return [
+        "",
+        f"Stops with no persistence value at as_of: {len(sweep.no_forecast_stop_keys)} of "
+        f"{row.stops_total} — still visited, collect 0 L / 0 kg [demo assumption "
+        "labelling; contract §2.3: no number is fabricated].",
+        "",
+        f"Shift overruns reported (contract §4.4): {len(sweep.shift_violations)}",
+    ]
+
+
+def _gains_lines(run: ComparisonRun) -> list[str]:
+    """§4.7 gain decomposition; null-aware when the optimised scenario has no
+    usable solution (infeasible/timeout — a gain against 0 would be
+    fabricated, §5.2.2)."""
+    gains = run.gains
+    optimised_status = run.optimised_median.solution.status
+    routing_text = (
+        str(gains.routing_gain_m)
+        if gains.routing_gain_m is not None
+        else f"null — the optimised scenario has status {optimised_status}; a gain "
+        "against 0 would be fabricated (§5.2.2)"
+    )
+    total_text = str(gains.total_gain_m) if gains.total_gain_m is not None else "null"
+    return [
+        f"- selection_gain_m (naive_sweep_all - naive_sweep_selected): {gains.selection_gain_m}",
+        f"- routing_gain_m (naive_sweep_selected - ortools median): {routing_text}",
+        f"- total_gain_m: {total_text}",
+        "",
+        "Different served-stop counts across scenarios are inherent — normalise "
+        "with the per-stop/per-kg metrics in the tables above; never claim "
+        "like-for-like distance (§4.7).",
+    ]
+
+
+def _determinism_lines(run: ComparisonRun) -> list[str]:
+    """§4.7 repetition protocol section, from ``optimised_determinism``."""
+    det = run.optimised_determinism
+    mode_text = (
+        "identical (min == max — deterministic solution-budget stop, §4.4)"
+        if det.mode == "identical"
+        else "median_of_runs (wall-clock variance observed — the median is the "
+        "value used in this document; reported, never hidden)"
+    )
+    return [
+        f"- runs: {det.runs}",
+        f"- mode: {mode_text}",
+        f"- distance_m min / median / max: {det.distance_m_min} / "
+        f"{_median_number(det.distance_m_median)} / {det.distance_m_max}",
     ]
 
 
@@ -192,17 +251,17 @@ def _render_markdown(
     n_series: int,
     date_min: date | None,
     date_max: date | None,
-    naive: NaiveSolution,
-    optimised: api_schemas.RouteResponse,
+    run: ComparisonRun,
 ) -> str:
-    """Render both scenarios with labels, assumptions and provenance notes."""
-    naive_totals = naive.totals
-    optimised_solution = optimised.solution
-    optimised_totals = optimised_solution.totals
+    """Render the three §4.7 scenarios, gains, determinism and labels."""
+    sweeps = {
+        "naive_sweep_all": run.sweep_all,
+        "naive_sweep_selected": run.sweep_selected,
+    }
     lines: list[str] = []
     add = lines.append
 
-    add("# Demo numbers — naive fixed-order vs optimised (M12)")
+    add("# Demo numbers — naive sweep vs optimised comparison (M12 v2)")
     add("")
     add(
         f"Reproducing command: `python -m src.api.compare_demo` (writes `{output_path}`; "
@@ -221,81 +280,54 @@ def _render_markdown(
     )
     add("")
     add(
-        f"Distance provenance for BOTH scenarios: haversine_straight_line_derived — "
+        f"Distance provenance for ALL scenarios: haversine_straight_line_derived — "
         f"{DETOUR_NOTE}. Synthetic stop coordinates derive from SHA-256 of series keys; "
         "the depot and disposal site are synthetic fixtures near Heilbronn."
     )
     add("")
-    add("## Scenario A — naive fixed order (`naive_fixed_order`, no OR-Tools)")
+    add(
+        f"Naive visiting order (both sweep scenarios): §4.7 area sweep — grid cells of "
+        f"SWEEP_CELL_SIZE_DEG={SWEEP_CELL_SIZE_DEG}° (~1 km [demo assumption]), "
+        "row-major (lat band ascending, then lon ascending), lexicographic "
+        "(location_id, material_type) within a cell [demo assumption — the data has "
+        "no area field, so the order is not geographic]."
+    )
+    add("")
+    for scenario in run.scenarios:
+        add(f"## {SCENARIO_HEADINGS[scenario.method]}")
+        add("")
+        lines.extend(_scenario_table(scenario))
+        sweep = sweeps.get(scenario.method)
+        if sweep is not None:
+            lines.extend(_sweep_lines(sweep, scenario))
+        add("")
+    selection = run.optimised_median.selection
+    add(
+        f"Selection (policy §3, default config): {len(selection.selected)} selected / "
+        f"{len(selection.skipped)} skipped — the ortools and naive_sweep_selected "
+        "scenarios route only selected candidates; naive_sweep_all visits all "
+        f"{run.sweep_all.totals.stops_total} series."
+    )
+    add("")
+    add("## Gains (derived, metres — contract §4.7)")
+    add("")
+    lines.extend(_gains_lines(run))
     add("")
     add(
-        "Visiting order: fixed lexicographic (location_id, material_type) [demo "
-        "assumption — the data has no area field, so the order is not geographic]."
+        f"## Optimised determinism (§4.7 repetition protocol, "
+        f"{run.optimised_determinism.runs} solves)"
     )
     add("")
-    lines.extend(
-        _scenario_table(
-            status=naive.status,
-            distance_m=naive_totals.distance_m,
-            duration_min=naive_totals.duration_min,
-            stops_served=naive_totals.stops_served,
-            stops_total=naive_totals.stops_total,
-            vehicles_used=len(naive.routes),
-            collected_volume_litres=naive_totals.collected_volume_litres,
-            collected_weight_kg=naive_totals.collected_weight_kg,
-            unserved_count=len(naive.unserved),
-            fleet_recommendation=_fleet_response(naive.fleet_recommendation),
-        )
-    )
-    add("")
-    add(
-        f"Stops with no persistence value at as_of: {len(naive.no_forecast_stop_keys)} — "
-        "still visited, collect 0 L / 0 kg [demo assumption labelling; contract §2.3: "
-        "no number is fabricated]."
-    )
-    add("")
-    add(f"Shift overruns reported (contract §4.4): {len(naive.shift_violations)}")
-    add("")
-    add("## Scenario B — optimised (OR-Tools CVRP, `src.routing.solver.solve`)")
-    add("")
-    lines.extend(
-        _scenario_table(
-            status=optimised_solution.status,
-            distance_m=optimised_totals.distance_m,
-            duration_min=optimised_totals.duration_min,
-            stops_served=optimised_totals.stops_served,
-            stops_total=optimised_totals.stops_total,
-            vehicles_used=len(optimised_solution.routes),
-            collected_volume_litres=optimised_totals.collected_volume_litres,
-            collected_weight_kg=optimised_totals.collected_weight_kg,
-            unserved_count=len(optimised_solution.unserved),
-            fleet_recommendation=optimised_solution.fleet_recommendation,
-        )
-    )
-    add("")
-    add(
-        f"Selection (policy §3, default config): {len(optimised.selection.selected)} "
-        f"selected / {len(optimised.selection.skipped)} skipped — the optimised "
-        "scenario routes only selected candidates; the naive scenario visits all "
-        f"{naive_totals.stops_total} series."
-    )
+    lines.extend(_determinism_lines(run))
     add("")
     add("## Assumptions (each labelled [demo assumption])")
     add("")
-    add(
-        "- Naive visiting order is fixed lexicographic (location_id, material_type) — "
-        "the data has no area field [observed]."
-    )
-    add(
-        "- Naive zero-fill rule: series without a persistence value at as_of are still "
-        "visited and collect 0 L / 0 kg."
-    )
-    for assumption in optimised.assumptions:
+    for assumption in run.assumptions:
         add(f"- {assumption}")
     add("")
     add("## Notes")
     add("")
-    add(f"- {GLS_NOTE}")
+    add(f"- {DETERMINISM_NOTE}")
     add(
         "- Unserved stops are never silently dropped (contract §4.4); the generated "
         "solution objects carry a deterministic reason per stop."
@@ -304,23 +336,13 @@ def _render_markdown(
     return "\n".join(lines)
 
 
-def _fleet_response(recommendation: FleetRecommendation) -> api_schemas.FleetRecommendationResponse:
-    """Map the domain §4.3 fleet recommendation onto the §5.2 response shape
-    (same mapping the API layer uses, so both scenario tables render alike)."""
-    return api_schemas.FleetRecommendationResponse(
-        vehicle_type_id=recommendation.vehicle_type_id,
-        count=recommendation.count,
-        basis=api_schemas.FleetBasisResponse(
-            ceil_by_volume=recommendation.basis.ceil_by_volume,
-            ceil_by_weight=recommendation.basis.ceil_by_weight,
-        ),
-    )
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point: run both scenarios and write the markdown document."""
+    """CLI entry point: run the §4.7 comparison and write the markdown doc."""
     parser = argparse.ArgumentParser(
-        description="M12 demo comparison: naive fixed-order vs OR-Tools optimised."
+        description=(
+            "M12 demo comparison: naive area sweeps vs OR-Tools optimised "
+            "(§4.7 scenarios, gains, determinism)."
+        )
     )
     parser.add_argument("--data", type=Path, default=DEFAULT_CSV_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
@@ -339,12 +361,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(result.markdown, encoding="utf-8")
+    scenario_counts = ", ".join(
+        f"{scenario.method} {scenario.stops_served}/{scenario.stops_total}"
+        for scenario in result.run.scenarios
+    )
     print(
-        f"wrote {arguments.output} "
-        f"(naive {result.naive.totals.stops_served}/"
-        f"{result.naive.totals.stops_total} served, "
-        f"optimised {result.optimised.solution.totals.stops_served}/"
-        f"{result.optimised.solution.totals.stops_total} served)"
+        f"wrote {arguments.output} ({scenario_counts} served; "
+        f"optimised determinism mode={result.run.optimised_determinism.mode})"
     )
     return 0
 
