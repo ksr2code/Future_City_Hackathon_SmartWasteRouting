@@ -348,6 +348,20 @@ RouteResponse   = { selection: SelectionResponse, solution: §4.3 RoutingSolutio
                     assumptions: [label strings] }
 ```
 
+### 5.2.1 Wire-format pins (JSON, agreed 2026-11-14 after an M11 typing bug)
+
+The §4.3 names are the internal domain shapes; the API serialises as follows
+(frontend types must match these, not the domain forms):
+
+- `POST /api/datasets` returns the `DatasetSummary` fields **flat**, plus
+  `errors`/`warnings` — there is **no nested `summary` key**.
+- `RoutingSolution.unserved[]` is **flat** `{location_id, material_type,
+  reason}` (the domain `stop_key` tuple is expanded by the API layer).
+- `Route.load_progression` serialises as arrays: `[volume_litres,
+  weight_kg][]`.
+- Route `sequence` nodes carry a `node_type` discriminator:
+  `"depot" | "disposal" | "stop"`.
+
 ### 5.3 Rules
 
 - Overrides validated by constructing `PolicyConfig`/`RoutingConfig`; invalid →
