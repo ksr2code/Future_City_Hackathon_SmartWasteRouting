@@ -60,6 +60,12 @@ class TestSpaServing:
         assert response.status_code == 200
         assert "console.log(1);" in response.text
 
+    def test_encoded_traversal_path_404(self, tmp_path: Path) -> None:
+        """URL-encoded ../ traversal must never escape the dist dir."""
+        client = make_client(tmp_path, {"index.html": "<html>SPA</html>"})
+        assert client.get("/..%2f..%2fetc%2fpasswd").status_code == 404
+        assert client.get("/..%2f..%2fetc%2fpasswd.js").status_code == 404
+
     def test_missing_asset_with_extension_404(self, tmp_path: Path) -> None:
         client = make_client(tmp_path, {"index.html": "<html>SPA</html>"})
         assert client.get("/assets/missing.js").status_code == 404

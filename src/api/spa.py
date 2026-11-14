@@ -46,6 +46,10 @@ def install_spa(app: FastAPI, dist_dir: Path) -> None:
             or full_path.startswith("health/")
         ):
             raise HTTPException(status_code=404, detail="Not Found")
+        if any(part == ".." for part in Path(full_path).parts):
+            # Traversal attempt (URL-encoded %2f arrives decoded here) —
+            # never serve anything, not even the SPA fallback.
+            raise HTTPException(status_code=404, detail="Not Found")
         candidate = (resolved_dist / full_path).resolve()
         if candidate.is_relative_to(resolved_dist) and candidate.is_file():
             return FileResponse(candidate)

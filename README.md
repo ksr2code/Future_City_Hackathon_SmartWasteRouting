@@ -61,8 +61,8 @@ UI still works with uploaded CSVs.
 
 | Env var | Effect | Default |
 |---|---|---|
-| `WASTECITY_SOLVER_TIME_LIMIT_S` | Positive float; replaces the default `solver_time_limit_s` (§4.6) for requests that do **not** override it. An explicit request override always wins. | unset → §4.6 default |
-| `WASTECITY_MAX_STOPS` | Positive int; only the first N policy-selected candidates (§3.3 order) are handed to the solver; the rest appear in `unserved` with reason `hosted_demo_stop_cap` — never silently dropped. | unset → no cap |
+| `WASTECITY_SOLVER_TIME_LIMIT_S` | Positive finite float; replaces the default `solver_time_limit_s` (§4.6) for requests that do **not** override it. An explicit request override always wins. Applies everywhere (interactive route **and** `/api/comparison`) — a pure stopping-criterion safety knob. | unset → §4.6 default |
+| `WASTECITY_MAX_STOPS` | Positive int; only the first N policy-selected candidates (§3.3 order) are handed to the solver; the rest appear in `unserved` with reason `hosted_demo_stop_cap` — never silently dropped. Applies to the **interactive route demo only** (`POST /api/route`); `/api/comparison` is always computed on the full §4.7 basis so gains stay like-for-like. | unset → no cap |
 
 Invalid values are ignored with a warning log (the service never crashes on
 them); unset variables leave behaviour byte-identical to local defaults.

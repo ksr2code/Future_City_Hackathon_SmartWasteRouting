@@ -28,6 +28,7 @@ config cannot take the whole demo down.
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,9 @@ ENV_MAX_STOPS = "WASTECITY_MAX_STOPS"
 def hosted_solver_time_limit_s() -> float | None:
     """Effective solver time-limit override, or ``None`` when unset/invalid.
 
-    Valid: a float > 0. Invalid (unparseable or non-positive) → warning log,
-    ``None`` (falls back to the §4.6 default; 500-free fallback choice).
+    Valid: a finite float > 0. Invalid (unparseable, non-finite or
+    non-positive) → warning log, ``None`` (falls back to the §4.6 default;
+    500-free fallback choice).
     """
     raw = os.environ.get(ENV_SOLVER_TIME_LIMIT_S)
     if raw is None or raw.strip() == "":
@@ -51,6 +53,16 @@ def hosted_solver_time_limit_s() -> float | None:
         logger.warning(
             "%s=%r is not a float — ignored, using the §4.6 default "
             "solver_time_limit_s (deployment knob, not a crash)",
+            ENV_SOLVER_TIME_LIMIT_S,
+            raw,
+        )
+        return None
+    if not math.isfinite(value):
+        # inf/nan/1e400 pass naive > 0 checks but would poison the solver's
+        # wall-clock cap (and 500 a request) — rejected like any invalid value.
+        logger.warning(
+            "%s=%r must be a finite positive float — ignored, using the "
+            "§4.6 default solver_time_limit_s (deployment knob, not a crash)",
             ENV_SOLVER_TIME_LIMIT_S,
             raw,
         )

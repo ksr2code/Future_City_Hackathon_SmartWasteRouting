@@ -86,6 +86,28 @@ class TestEnvSolverTimeLimit:
         assert any(record.levelno == logging.WARNING for record in caplog.records)
         assert "not a float" in caplog.text or "positive float" in caplog.text
 
+    @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "1e400"])
+    def test_non_finite_value_rejected_with_warning(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        raw: str,
+    ) -> None:
+        """inf/nan/1e400 pass naive `> 0` checks but would poison the solver
+        cap — rejected via math.isfinite, same warning + fallback path."""
+        monkeypatch.setenv(hosted.ENV_SOLVER_TIME_LIMIT_S, raw)
+        upload_csv(client)
+        with caplog.at_level(logging.WARNING, logger="src.api.hosted"):
+            body = route_body(client)
+        assert hosted.hosted_solver_time_limit_s() is None  # 500-free fallback
+        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert "solver_time_limit_s=inf" not in "\n".join(body["assumptions"])
+        assert any(
+            record.levelno == logging.WARNING and "finite" in record.getMessage()
+            for record in caplog.records
+        )
+
     def test_blank_value_falls_back(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -175,6 +197,26 @@ class TestEnvMaxStops:
             for item in body["solution"]["unserved"]
         )
         assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    def test_comparison_stays_uncapped_full_basis(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """§4.7 ruling: the stop cap applies to the interactive route demo
+        only — /api/comparison's ortools row must reflect the FULL policy
+        selection (stops_total == n_selected, not the cap)."""
+        monkeypatch.setenv(hosted.ENV_MAX_STOPS, "2")
+        upload_csv(client)
+        response = client.get("/api/comparison")
+        assert response.status_code == 200, response.text
+        ortools_row = response.json()["scenarios"][2]
+        assert ortools_row["method"] == "ortools"
+        assert ortools_row["stops_total"] == 4  # full selection, NOT the cap
+        # The same env caps the interactive route as usual (contrast).
+        body = route_body(client)
+        assert any(
+            item["reason"].startswith("hosted_demo_stop_cap")
+            for item in body["solution"]["unserved"]
+        )
 
     def test_both_knobs_together(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(hosted.ENV_SOLVER_TIME_LIMIT_S, "2.0")

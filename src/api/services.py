@@ -445,7 +445,10 @@ def _skip_item(skip: Skip) -> schemas.SkipResponse:
 # --- Route (§5.1 POST /api/route) --------------------------------------------
 
 
-def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
+def run_route(
+    request: schemas.RouteRequest,
+    apply_hosted_cap: bool = True,
+) -> schemas.RouteResponse:
     """Full pipeline: forecast -> policy -> synthetic geography -> matrix ->
     problem -> solve. Always returns selection + solution (§5.3).
 
@@ -460,6 +463,13 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
     ``hosted_demo_stop_cap`` reason — never silently dropped (AGENTS rule 9)
     — and ``totals.stops_total`` still counts every policy-selected stop, so
     ``stops_served + len(unserved) == stops_total`` holds. Unset → no cap.
+
+    ``apply_hosted_cap=False`` bypasses the stop cap (the interactive
+    ``POST /api/route`` default stays True): the §4.7 comparison must keep
+    its full basis — capping only the ortools row would make
+    ``routing_gain_m`` misleading, so ``run_comparison`` calls this with the
+    cap off. The ``WASTECITY_SOLVER_TIME_LIMIT_S`` override is NOT affected
+    by this flag (a pure stopping-criterion safety knob, no basis effect).
     """
     policy_config = _effective_policy_config(request.policy_config)
     routing = _effective_routing(request.routing_config)
@@ -477,8 +487,10 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
     )
 
     # Hosted stop cap (deployment knob): deterministically keep the first N
-    # of the policy-ordered selected candidates for the solver.
-    cap = hosted.hosted_max_stops()
+    # of the policy-ordered selected candidates for the solver. The
+    # comparison core passes apply_hosted_cap=False to stay on the full
+    # §4.7 basis (see run_route docstring).
+    cap = hosted.hosted_max_stops() if apply_hosted_cap else None
     solver_candidates = list(selection.selected)
     capped_out: list[Candidate] = []
     if cap is not None and cap < len(solver_candidates):
@@ -972,6 +984,10 @@ def run_comparison(
 
     ``dataset`` must be the active store dataset (the CLI uploads it first;
     the endpoint has it loaded) because ``run_route`` reads the store.
+
+    The ``WASTECITY_MAX_STOPS`` deployment knob does NOT apply here (full
+    §4.7 basis on every scenario); ``WASTECITY_SOLVER_TIME_LIMIT_S`` does
+    (stopping-criterion safety only). See ``run_route``.
     """
     if runs < 1:
         raise ValueError(f"runs must be >= 1, got {runs}")
@@ -980,13 +996,20 @@ def run_comparison(
     # ``runs`` times for the §4.7 repetition protocol. The run whose distance
     # is the median carries the whole ``ortools`` row (self-consistent row;
     # its distance IS the §4.7 median for the odd default runs=5).
+    # ``apply_hosted_cap=False``: the comparison stays on the FULL policy
+    # selection (§4.7 basis) even when the ``WASTECITY_MAX_STOPS`` deployment
+    # knob caps the interactive route demo — capping only this row would make
+    # ``routing_gain_m`` a misleading mixed-basis number. The time-limit env
+    # override stays applied (pure stopping-criterion safety, no basis
+    # effect); README "Run with Docker" documents the same.
     optimised_runs = [
         run_route(
             schemas.RouteRequest(
                 as_of_date=as_of,
                 horizon_days=horizon_days,
                 method=METHOD_PERSISTENCE,
-            )
+            ),
+            apply_hosted_cap=False,
         )
         for _ in range(runs)
     ]

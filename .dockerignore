@@ -10,6 +10,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 data/
+docs/
+tests/
 docs/figures/
 dist/
 *.sqlite
