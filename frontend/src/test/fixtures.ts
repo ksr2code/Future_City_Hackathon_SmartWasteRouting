@@ -4,6 +4,7 @@
  */
 import type {
   ComparisonResponse,
+  ComparisonScenario,
   ConfigDefaults,
   DatasetSummary,
   RouteResponse,
@@ -170,26 +171,34 @@ export const configFixture: ConfigDefaults = {
 };
 
 /**
- * §5.2.2 ComparisonResponse — synthetic values mirroring the documented M12
- * demo run (docs/demo_numbers.md; distances are straight-line derived, never
- * road distance). Used to pin the Overview before/after rendering.
+ * §5.2.2 ComparisonResponse (v2) — synthetic fixture with the values observed
+ * in the real 2026-11-14 live capture (frontend/src/test/fixtures/real-capture/
+ * comparison.json): scenarios in the fixed §4.7 order, nullable per-metrics,
+ * gains incl. the honestly-negative selection gain, determinism "identical".
+ * Distances are straight-line derived, never road distance.
  */
-function scenario(method: "naive_fixed_order" | "ortools", overrides: Partial<ComparisonResponse["naive"]>) {
+function scenario(
+  method: "naive_sweep_all" | "naive_sweep_selected" | "ortools",
+  values: {
+    status: string;
+    distance_m: number;
+    duration_min: number;
+    stops_served: number;
+    stops_total: number;
+    collected_volume_litres: number;
+    collected_weight_kg: number;
+    unserved_count: number;
+    recommended_trucks: number;
+    fleet_basis: { ceil_by_volume: number; ceil_by_weight: number };
+    distance_per_stop_m: number | null;
+    distance_per_kg_m: number | null;
+  },
+): ComparisonScenario {
   return {
     method,
-    status: "feasible",
-    distance_m: 400475,
-    duration_min: 10521,
-    stops_served: 52,
-    stops_total: 1338,
+    ...values,
     vehicles_available: 3,
     vehicles_used: 3,
-    collected_volume_litres: 52820,
-    collected_weight_kg: 26410,
-    unserved_count: 1286,
-    recommended_trucks: 116,
-    fleet_basis: { ceil_by_volume: 116, ceil_by_weight: 38 },
-    ...overrides,
   };
 }
 
@@ -198,25 +207,80 @@ export const comparisonFixture: ComparisonResponse = {
   target_date: "2026-10-28",
   horizon_days: 28,
   method: "persistence",
-  naive: scenario("naive_fixed_order", {}),
-  optimised: {
-    ...scenario("ortools", {
-      distance_m: 69889,
-      duration_min: 601,
-      stops_served: 43,
+  scenarios: [
+    scenario("naive_sweep_all", {
+      status: "incomplete",
+      distance_m: 230865,
+      duration_min: 1389,
+      stops_served: 78,
+      stops_total: 1338,
+      collected_volume_litres: 82270,
+      collected_weight_kg: 41135,
+      unserved_count: 1260,
+      recommended_trucks: 116,
+      fleet_basis: { ceil_by_volume: 116, ceil_by_weight: 70 },
+      distance_per_stop_m: 2959.8,
+      distance_per_kg_m: 5.6,
+    }),
+    scenario("naive_sweep_selected", {
+      status: "incomplete",
+      distance_m: 262995,
+      duration_min: 1364,
+      stops_served: 63,
+      stops_total: 458,
+      collected_volume_litres: 105830,
+      collected_weight_kg: 52915,
+      unserved_count: 395,
+      recommended_trucks: 63,
+      fleet_basis: { ceil_by_volume: 63, ceil_by_weight: 38 },
+      distance_per_stop_m: 4174.5,
+      distance_per_kg_m: 5.0,
+    }),
+    scenario("ortools", {
+      status: "feasible",
+      distance_m: 57657,
+      duration_min: 546,
+      stops_served: 40,
       stops_total: 458,
       collected_volume_litres: 47880,
       collected_weight_kg: 23940,
-      unserved_count: 415,
+      unserved_count: 418,
       recommended_trucks: 63,
       fleet_basis: { ceil_by_volume: 63, ceil_by_weight: 38 },
+      distance_per_stop_m: 1441.4,
+      distance_per_kg_m: 2.4,
     }),
-    selected_count: 458,
-    skipped_count: 880,
+  ],
+  gains: {
+    selection_gain_m: -32130,
+    routing_gain_m: 205338,
+    total_gain_m: 173208,
+  },
+  optimised_determinism: {
+    runs: 5,
+    mode: "identical",
+    distance_m_median: 57657.0,
+    distance_m_min: 57657,
+    distance_m_max: 57657,
   },
   distance_provenance: "haversine_straight_line_derived",
   assumptions: [
     "Coordinates, depot and disposal sites are synthetic [demo assumption].",
     "Distances are straight-line derived, not road distance [demo assumption].",
   ],
+};
+
+/**
+ * Variant for the TechDetails median-of-runs wording (wall-clock solver
+ * variance observed): synthetic spread around the observed median.
+ */
+export const comparisonMedianOfRunsFixture: ComparisonResponse = {
+  ...comparisonFixture,
+  optimised_determinism: {
+    runs: 5,
+    mode: "median_of_runs",
+    distance_m_median: 57657.0,
+    distance_m_min: 57100,
+    distance_m_max: 58300,
+  },
 };

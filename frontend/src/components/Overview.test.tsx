@@ -14,6 +14,7 @@ import type { DatasetSummary } from "../lib/api";
 import { cleanup, flush, jsonResponse, render } from "../test/dom";
 import {
   comparisonFixture,
+  comparisonMedianOfRunsFixture,
   selectionFixture,
   summaryFixture,
   summaryWithFillStats,
@@ -217,8 +218,8 @@ describe("Overview — auto-candidates (today's recommendation)", () => {
   });
 });
 
-describe("Overview — fixed vs optimised comparison", () => {
-  it("renders the before/after table and the derived-savings label when computable", async () => {
+describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
+  it("renders the three-step scenario story with units on every number", async () => {
     stubRoutes(happyRoutes());
     render(
       <Overview
@@ -233,24 +234,79 @@ describe("Overview — fixed vs optimised comparison", () => {
     await flush();
     await flush();
 
-    expect(document.querySelector('[data-testid="comparison-table"]')).not.toBeNull();
-    const table = document.querySelector('[data-testid="comparison-table"]')?.textContent ?? "";
-    // Demo numbers are formatted with units (synthetic, docs/demo_numbers.md).
-    expect(table).toContain("400,475 m");
-    expect(table).toContain("69,889 m");
-    // derivedSavingsPct(400475, 69889) = 82.5 % — labelled as derived.
+    expect(document.querySelector('[data-testid="comparison-steps"]')).not.toBeNull();
+    const steps = document.body.textContent ?? "";
+    // Status quo (real capture values, straight-line-derived; units present).
+    expect(steps).toContain("230,865 m");
+    expect(steps).toContain("78 / 1,338");
+    expect(steps).toContain("5.6 m/kg");
+    // Selection-effect sweep.
+    expect(steps).toContain("262,995 m");
+    expect(steps).toContain("63 / 458");
+    expect(steps).toContain("5.0 m/kg");
+    // Optimised (median of 5 solves).
+    expect(steps).toContain("57,657 m");
+    expect(steps).toContain("40 / 458");
+    expect(steps).toContain("2.4 m/kg");
+    expect(steps).toContain("median of 5 solves");
+    // Derived savings: total_gain 173208 / sweep_all 230865 = 75.0 %.
     const savings = document.querySelector('[data-testid="comparison-savings"]')?.textContent ?? "";
-    expect(savings).toContain("Derived saving");
-    expect(savings).toContain("82.5 %");
+    expect(savings).toContain("Derived saving share");
+    expect(savings).toContain("75.0 %");
   });
 
-  it("hides the derived-savings label when it is not computable (degenerate naive distance)", async () => {
+  it("labels the negative selection gain honestly (never spun positive)", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const gain = document.querySelector('[data-testid="comparison-selection-gain"]')?.textContent ?? "";
+    expect(gain).toContain("−32,130 m");
+    expect(gain).toContain("did not pay off");
+  });
+
+  it("renders gains with + sign and total gain when positive", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("+205,338 m");
+    expect(text).toContain("+173,208 m");
+  });
+
+  it("renders nullable per-metrics as — and hides gains without fabricating 0s", async () => {
     stubRoutes({
       ...happyRoutes(),
       "GET /api/comparison": () =>
         jsonResponse({
           ...comparisonFixture,
-          naive: { ...comparisonFixture.naive, distance_m: 0 },
+          scenarios: comparisonFixture.scenarios.map((s) => ({
+            ...s,
+            distance_per_stop_m: null,
+            distance_per_kg_m: null,
+          })),
+          gains: { selection_gain_m: null, routing_gain_m: null, total_gain_m: null },
         }),
     });
     render(
@@ -266,8 +322,67 @@ describe("Overview — fixed vs optimised comparison", () => {
     await flush();
     await flush();
 
-    expect(document.querySelector('[data-testid="comparison-table"]')).not.toBeNull();
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("— m/kg");
     expect(document.querySelector('[data-testid="comparison-savings"]')).toBeNull();
+    expect(
+      document.querySelector('[data-testid="comparison-selection-gain"]')?.textContent,
+    ).toContain("Gain not available");
+  });
+
+  it("shows the identical-determinism statement in technical details", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const details = document.querySelector(
+      '[data-testid="comparison-tech-details"]',
+    ) as HTMLDetailsElement | null;
+    details?.setAttribute("open", "true");
+    const text = details?.textContent ?? "";
+    expect(text).toContain("deterministic: identical distance across 5 solves");
+    // Straight-line provenance note stays — never road distance.
+    expect(text).toContain("NOT road distance");
+  });
+
+  it("shows the median-of-runs wording with the observed spread in technical details", async () => {
+    stubRoutes({
+      ...happyRoutes(),
+      "GET /api/comparison": () => jsonResponse(comparisonMedianOfRunsFixture),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const details = document.querySelector(
+      '[data-testid="comparison-tech-details"]',
+    ) as HTMLDetailsElement | null;
+    details?.setAttribute("open", "true");
+    const text = details?.textContent ?? "";
+    expect(text).toContain("varied across 5 solves");
+    expect(text).toContain("median 57,657 m");
+    expect(text).toContain("57,100 m");
+    expect(text).toContain("58,300 m");
+    expect(text).toContain("NOT road distance");
   });
 
   it("shows the comparison empty state on 404 (no dataset server-side, not an error)", async () => {
@@ -290,10 +405,10 @@ describe("Overview — fixed vs optimised comparison", () => {
 
     const empty = document.querySelector('[data-testid="comparison-card"] [data-testid="empty-state"]');
     expect(empty?.textContent).toContain("the comparison becomes available after loading data");
-    expect(document.querySelector('[data-testid="comparison-table"]')).toBeNull();
+    expect(document.querySelector('[data-testid="comparison-steps"]')).toBeNull();
   });
 
-  it("shows a comparison error state on a malformed payload ({status:\"ok\"})", async () => {
+  it("shows a comparison error state on a malformed v2 payload ({status:\"ok\"})", async () => {
     stubRoutes({
       ...happyRoutes(),
       "GET /api/comparison": () => jsonResponse({ status: "ok" }),
@@ -313,7 +428,7 @@ describe("Overview — fixed vs optimised comparison", () => {
 
     const error = document.querySelector('[data-testid="comparison-card"] [data-testid="error-state"]');
     expect(error?.textContent).toContain("Could not compute the comparison");
-    expect(error?.textContent).toContain("missing naive/optimised");
+    expect(error?.textContent).toContain("missing scenarios/gains/determinism");
   });
 });
 

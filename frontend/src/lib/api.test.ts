@@ -139,18 +139,56 @@ describe("api client (§5)", () => {
     expect(config.routing.container_volume_litres).toBe(1900);
   });
 
-  it("fetchComparison GETs /api/comparison and parses the §5.2.2 payload", async () => {
+  it("fetchComparison GETs /api/comparison and parses the §5.2.2 v2 payload", async () => {
     const fetchMock = stubJsonFetch(() => jsonResponse(comparisonFixture));
 
     const comparison = await fetchComparison();
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/comparison");
-    expect(comparison.naive.method).toBe("naive_fixed_order");
-    expect(comparison.naive.distance_m).toBe(400475);
-    expect(comparison.optimised.method).toBe("ortools");
-    expect(comparison.optimised.distance_m).toBe(69889);
-    expect(comparison.optimised.selected_count).toBe(458);
+    // Fixed §4.7 scenario order.
+    expect(comparison.scenarios.map((s) => s.method)).toEqual([
+      "naive_sweep_all",
+      "naive_sweep_selected",
+      "ortools",
+    ]);
+    expect(comparison.scenarios[0]?.distance_m).toBe(230865);
+    expect(comparison.scenarios[2]?.distance_m).toBe(57657);
+    // Nullable per-metrics are preserved, never coerced.
+    expect(comparison.scenarios[2]?.distance_per_kg_m).toBe(2.4);
+    // Gains, incl. the honestly-negative selection gain.
+    expect(comparison.gains.selection_gain_m).toBe(-32130);
+    expect(comparison.gains.total_gain_m).toBe(173208);
+    expect(comparison.optimised_determinism).toEqual({
+      runs: 5,
+      mode: "identical",
+      distance_m_median: 57657.0,
+      distance_m_min: 57657,
+      distance_m_max: 57657,
+    });
     expect(comparison.distance_provenance).toBe("haversine_straight_line_derived");
+  });
+
+  it("fetchComparison preserves null per-metrics and null gains (never fabricated 0s)", async () => {
+    stubJsonFetch(() =>
+      jsonResponse({
+        ...comparisonFixture,
+        scenarios: comparisonFixture.scenarios.map((s) => ({
+          ...s,
+          distance_per_stop_m: null,
+          distance_per_kg_m: null,
+        })),
+        gains: { selection_gain_m: null, routing_gain_m: null, total_gain_m: null },
+      }),
+    );
+
+    const comparison = await fetchComparison();
+
+    expect(comparison.scenarios.every((s) => s.distance_per_stop_m === null && s.distance_per_kg_m === null)).toBe(
+      true,
+    );
+    expect(comparison.gains.selection_gain_m).toBeNull();
+    expect(comparison.gains.routing_gain_m).toBeNull();
+    expect(comparison.gains.total_gain_m).toBeNull();
   });
 
   it("fetchComparison maps 404 (no dataset loaded, §5.3) to ApiError carrying 404", async () => {

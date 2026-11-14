@@ -3,12 +3,14 @@ import {
   ApiError,
   fetchComparison,
   runCandidates,
+  type ComparisonMethod,
   type ComparisonResponse,
+  type ComparisonScenario,
   type DatasetSummary,
   type FillStats,
   type SelectionResponse,
 } from "../lib/api";
-import { derivedSavingsPct, formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "../lib/format";
+import { formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "../lib/format";
 import { t, tf, type Lang, type TranslationKey } from "../lib/i18n";
 import { DemoLoadButton } from "./DemoLoadButton";
 import { GlassLegend } from "./GlassLegend";
@@ -60,6 +62,8 @@ function isScenario(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const s = value as Record<string, unknown>;
   return (
+    typeof s.method === "string" &&
+    typeof s.status === "string" &&
     isFiniteNumber(s.distance_m) &&
     isFiniteNumber(s.duration_min) &&
     isFiniteNumber(s.stops_served) &&
@@ -72,8 +76,39 @@ function isScenario(value: unknown): boolean {
   );
 }
 
-function scenario(value: unknown): ComparisonResponse["naive"] | null {
-  return isScenario(value) ? (value as ComparisonResponse["naive"]) : null;
+/** Signed metres text for a nullable gain — null renders as "— m", never 0. */
+function formatGain(gain: number | null | undefined): string {
+  if (gain === null || gain === undefined || !Number.isFinite(gain)) return "— m";
+  const abs = `${Math.abs(gain).toLocaleString("en-US")} m`;
+  return gain < 0 ? `−${abs}` : `+${abs}`;
+}
+
+/**
+ * Defensive §5.2.2 v2 payload guard: `scenarios` must be the fixed §4.7 array
+ * of three well-formed scenarios, `gains`/`optimised_determinism` present.
+ */
+function validComparison(payload: ComparisonResponse | null): ComparisonResponse | null {
+  if (payload === null) return null;
+  if (!Array.isArray(payload.scenarios) || payload.scenarios.length !== 3) return null;
+  if (!payload.scenarios.every((s) => isScenario(s))) return null;
+  const det = payload.optimised_determinism;
+  if (
+    det === null ||
+    det === undefined ||
+    !isFiniteNumber(det.runs) ||
+    (det.mode !== "identical" && det.mode !== "median_of_runs")
+  ) {
+    return null;
+  }
+  return payload;
+}
+
+function scenarioByMethod(
+  comparison: ComparisonResponse | null,
+  method: ComparisonMethod,
+): ComparisonScenario | null {
+  const s = comparison?.scenarios.find((x) => x.method === method);
+  return s !== undefined ? s : null;
 }
 
 export function Overview({
@@ -156,10 +191,10 @@ export function Overview({
     fetchComparison()
       .then((payload) => {
         if (cancelled) return;
-        // Defensive shape guard: missing naive/optimised → error state.
-        if (scenario(payload.naive) === null || scenario(payload.optimised) === null) {
+        // Defensive shape guard: malformed v2 payload → error state, never crash.
+        if (validComparison(payload) === null) {
           setComparison(null);
-          setComparisonError("Unexpected /api/comparison response shape (missing naive/optimised)");
+          setComparisonError("Unexpected /api/comparison response shape (missing scenarios/gains/determinism)");
           return;
         }
         setComparison(payload);
@@ -185,11 +220,22 @@ export function Overview({
   const selected = selection?.selected ?? [];
   const skipped = selection?.skipped ?? [];
   const noForecastCount = skipped.filter((s) => s.reason_code === "no_forecast").length;
-  const naive = comparison !== null ? scenario(comparison.naive) : null;
-  const optimised = comparison !== null ? scenario(comparison.optimised) : null;
+  // §5.2.2 v2: fixed-order scenarios (naive_sweep_all, naive_sweep_selected, ortools).
+  const comparisonValid = validComparison(comparison);
+  const sweepAll = scenarioByMethod(comparisonValid, "naive_sweep_all");
+  const sweepSelected = scenarioByMethod(comparisonValid, "naive_sweep_selected");
+  const optimised = scenarioByMethod(comparisonValid, "ortools");
+  const gains = comparisonValid?.gains ?? null;
+  const determinism = comparisonValid?.optimised_determinism ?? null;
+  // Derived saving share = total gain ÷ status-quo distance. Purely derived
+  // (gains come from the API); labelled as derived, never a measured fact.
   const savingsPct =
-    naive !== null && optimised !== null
-      ? derivedSavingsPct(naive.distance_m, optimised.distance_m)
+    gains !== null &&
+    gains.total_gain_m !== null &&
+    sweepAll !== null &&
+    Number.isFinite(sweepAll.distance_m) &&
+    sweepAll.distance_m > 0
+      ? (gains.total_gain_m / sweepAll.distance_m) * 100
       : null;
 
   return (
@@ -245,17 +291,18 @@ export function Overview({
           <KeyNumberCard
             title={t(lang, "overview.keynum.distance.title")}
             value={
-              naive !== null && optimised !== null
-                ? `${formatMetres(naive.distance_m)} → ${formatMetres(optimised.distance_m)}`
+              sweepAll !== null && optimised !== null
+                ? `${formatMetres(sweepAll.distance_m)} → ${formatMetres(optimised.distance_m)}`
                 : "— m"
             }
             testid="keynum-distance"
           >
-            {naive !== null && optimised !== null ? (
+            {sweepAll !== null && optimised !== null ? (
               <>
-                {t(lang, "overview.keynum.distance.fixed")}: {formatMetres(naive.distance_m)} ·{" "}
+                {t(lang, "overview.keynum.distance.fixed")}: {formatMetres(sweepAll.distance_m)} ·{" "}
                 {t(lang, "overview.keynum.distance.optimised")}: {formatMetres(optimised.distance_m)}{" "}
-                · {t(lang, "unit.vehicles")}: {naive.recommended_trucks} → {optimised.recommended_trucks}
+                · {t(lang, "unit.vehicles")}: {sweepAll.recommended_trucks} →{" "}
+                {optimised.recommended_trucks}
                 {savingsPct !== null ? (
                   <span className="mt-1 block">
                     {tf(lang, "overview.keynum.distance.savings", {
@@ -362,74 +409,151 @@ export function Overview({
           <div className="mt-3"><EmptyState label={t(lang, "overview.state.comparisonNoDataset")} /></div>
         ) : null}
 
-        {naive !== null && optimised !== null && !comparisonLoading ? (
+        {sweepAll !== null && sweepSelected !== null && optimised !== null && !comparisonLoading ? (
           <div className="mt-3 space-y-2">
-            <div className="overflow-x-auto rounded border border-slate-200">
-              <table className="w-full text-left text-xs" data-testid="comparison-table">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="px-2 py-1.5" />
-                    <th className="px-2 py-1.5">{t(lang, "overview.beforeafter.fixed")}</th>
-                    <th className="px-2 py-1.5">{t(lang, "overview.beforeafter.optimised")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <ComparisonRow
-                    label={t(lang, "col.distance")}
-                    a={formatMetres(naive.distance_m)}
-                    b={formatMetres(optimised.distance_m)}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.duration")}
-                    a={formatMinutes(naive.duration_min)}
-                    b={formatMinutes(optimised.duration_min)}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.trucks")}
-                    a={`${naive.recommended_trucks} ${t(lang, "unit.vehicles")}`}
-                    b={`${optimised.recommended_trucks} ${t(lang, "unit.vehicles")}`}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.stopsServed")}
-                    a={`${naive.stops_served.toLocaleString("en-US")} / ${naive.stops_total.toLocaleString("en-US")}`}
-                    b={`${optimised.stops_served.toLocaleString("en-US")} / ${optimised.stops_total.toLocaleString("en-US")}`}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.unserved")}
-                    a={naive.unserved_count.toLocaleString("en-US")}
-                    b={optimised.unserved_count.toLocaleString("en-US")}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.volume")}
-                    a={formatLitres(naive.collected_volume_litres)}
-                    b={formatLitres(optimised.collected_volume_litres)}
-                  />
-                  <ComparisonRow
-                    label={t(lang, "col.weight")}
-                    a={formatKg(naive.collected_weight_kg)}
-                    b={formatKg(optimised.collected_weight_kg)}
-                  />
-                </tbody>
-              </table>
-            </div>
+            <ol className="space-y-2" data-testid="comparison-steps">
+              <ComparisonStep
+                index={1}
+                title={t(lang, "overview.compare.step1.title")}
+                rows={[
+                  [t(lang, "col.distance"), formatMetres(sweepAll.distance_m)],
+                  [
+                    t(lang, "col.stopsServed"),
+                    `${sweepAll.stops_served.toLocaleString("en-US")} / ${sweepAll.stops_total.toLocaleString("en-US")}`,
+                  ],
+                  [t(lang, "col.duration"), formatMinutes(sweepAll.duration_min)],
+                  [t(lang, "col.trucks"), `${sweepAll.recommended_trucks} ${t(lang, "unit.vehicles")}`],
+                  [t(lang, "col.volume"), formatLitres(sweepAll.collected_volume_litres)],
+                  [t(lang, "col.weight"), formatKg(sweepAll.collected_weight_kg)],
+                  [
+                    t(lang, "col.distancePerKg"),
+                    sweepAll.distance_per_kg_m !== null
+                      ? `${sweepAll.distance_per_kg_m.toFixed(1)} m/kg`
+                      : "— m/kg",
+                  ],
+                ]}
+              />
+              <ComparisonStep
+                index={2}
+                title={t(lang, "overview.compare.step2.title")}
+                rows={[
+                  [t(lang, "col.distance"), formatMetres(sweepSelected.distance_m)],
+                  [
+                    t(lang, "col.stopsServed"),
+                    `${sweepSelected.stops_served.toLocaleString("en-US")} / ${sweepSelected.stops_total.toLocaleString("en-US")}`,
+                  ],
+                  [t(lang, "col.duration"), formatMinutes(sweepSelected.duration_min)],
+                  [t(lang, "col.trucks"), `${sweepSelected.recommended_trucks} ${t(lang, "unit.vehicles")}`],
+                  [t(lang, "col.volume"), formatLitres(sweepSelected.collected_volume_litres)],
+                  [t(lang, "col.weight"), formatKg(sweepSelected.collected_weight_kg)],
+                  [
+                    t(lang, "col.distancePerKg"),
+                    sweepSelected.distance_per_kg_m !== null
+                      ? `${sweepSelected.distance_per_kg_m.toFixed(1)} m/kg`
+                      : "— m/kg",
+                  ],
+                ]}
+              >
+                {gains !== null && gains.selection_gain_m !== null ? (
+                  <p
+                    className={`text-xs font-semibold ${
+                      gains.selection_gain_m < 0 ? "text-amber-700" : "text-emerald-700"
+                    }`}
+                    data-testid="comparison-selection-gain"
+                  >
+                    {tf(lang, "overview.compare.selectionGain", {
+                      gain: formatGain(gains.selection_gain_m),
+                    })}
+                    {gains.selection_gain_m < 0 ? (
+                      <> {t(lang, "overview.compare.selectionGainNegative")}</>
+                    ) : null}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500" data-testid="comparison-selection-gain">
+                    {t(lang, "overview.compare.gainUnavailable")}
+                  </p>
+                )}
+              </ComparisonStep>
+              <ComparisonStep
+                index={3}
+                title={
+                  determinism !== null
+                    ? `${t(lang, "overview.compare.step3.title")} (${tf(lang, "overview.compare.step3.medianSuffix", { runs: determinism.runs })})`
+                    : t(lang, "overview.compare.step3.title")
+                }
+                rows={[
+                  [t(lang, "col.distance"), formatMetres(optimised.distance_m)],
+                  [
+                    t(lang, "col.stopsServed"),
+                    `${optimised.stops_served.toLocaleString("en-US")} / ${optimised.stops_total.toLocaleString("en-US")}`,
+                  ],
+                  [t(lang, "col.duration"), formatMinutes(optimised.duration_min)],
+                  [t(lang, "col.trucks"), `${optimised.recommended_trucks} ${t(lang, "unit.vehicles")}`],
+                  [t(lang, "col.volume"), formatLitres(optimised.collected_volume_litres)],
+                  [t(lang, "col.weight"), formatKg(optimised.collected_weight_kg)],
+                  [
+                    t(lang, "col.distancePerKg"),
+                    optimised.distance_per_kg_m !== null
+                      ? `${optimised.distance_per_kg_m.toFixed(1)} m/kg`
+                      : "— m/kg",
+                  ],
+                ]}
+              >
+                {gains !== null && gains.routing_gain_m !== null ? (
+                  <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-routing-gain">
+                    {tf(lang, "overview.compare.routingGain", { gain: formatGain(gains.routing_gain_m) })}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500" data-testid="comparison-routing-gain">
+                    {t(lang, "overview.compare.gainUnavailable")}
+                  </p>
+                )}
+                {gains !== null && gains.total_gain_m !== null ? (
+                  <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-total-gain">
+                    {tf(lang, "overview.compare.totalGain", { gain: formatGain(gains.total_gain_m) })}
+                  </p>
+                ) : null}
+              </ComparisonStep>
+            </ol>
+            <p className="text-xs leading-relaxed text-slate-500" data-testid="comparison-perkg-note">
+              {t(lang, "overview.compare.perKgNote")}
+            </p>
             {savingsPct !== null ? (
               <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-savings">
-                {tf(lang, "overview.beforeafter.savings", { pct: `${savingsPct.toFixed(1)} %` })}
+                {tf(lang, "overview.compare.savings", { pct: `${savingsPct.toFixed(1)} %` })}
               </p>
             ) : null}
             <TechDetails label={t(lang, "techdetails.label")} testid="comparison-tech-details">
               <p data-testid="comparison-statuses">
-                {t(lang, "overview.beforeafter.fixed")}: {comparison?.naive.status} ·{" "}
-                {t(lang, "overview.beforeafter.optimised")}: {comparison?.optimised.status}
+                {comparisonValid !== null
+                  ? comparisonValid.scenarios
+                      .map((s) => `${scenarioShortLabel(lang, s.method)}: ${s.status}`)
+                      .join(" · ")
+                  : null}
               </p>
-              <p>{comparison?.distance_provenance === "haversine_straight_line_derived"
+              {determinism !== null ? (
+                <p data-testid="comparison-determinism">
+                  {determinism.mode === "identical"
+                    ? tf(lang, "overview.compare.determinism.identical", {
+                        runs: determinism.runs,
+                        median: formatMetres(determinism.distance_m_median),
+                      })
+                    : tf(lang, "overview.compare.determinism.medianOfRuns", {
+                        runs: determinism.runs,
+                        median: formatMetres(determinism.distance_m_median),
+                        min: formatMetres(determinism.distance_m_min),
+                        max: formatMetres(determinism.distance_m_max),
+                      })}
+                </p>
+              ) : null}
+              <p>{comparisonValid?.distance_provenance === "haversine_straight_line_derived"
                 ? "Distances: straight-line (haversine × detour factor) — NOT road distance"
-                : `Distance provenance: ${comparison?.distance_provenance ?? "—"}`}</p>
+                : `Distance provenance: ${comparisonValid?.distance_provenance ?? "—"}`}</p>
               <p className="text-slate-500">
                 {t(lang, "overview.tech.assumptions")}:
               </p>
               <ul className="list-disc pl-4">
-                {(comparison?.assumptions ?? []).map((line) => (
+                {(comparisonValid?.assumptions ?? []).map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>
@@ -497,12 +621,44 @@ function ExampleList({
   );
 }
 
-function ComparisonRow({ label, a, b }: { label: string; a: string; b: string }) {
+/** Short scenario label for the technical-details statuses line. */
+function scenarioShortLabel(lang: Lang, method: ComparisonMethod): string {
+  const key: TranslationKey =
+    method === "naive_sweep_all"
+      ? "overview.compare.step1.short"
+      : method === "naive_sweep_selected"
+        ? "overview.compare.step2.short"
+        : "overview.compare.step3.short";
+  return t(lang, key);
+}
+
+/** One numbered scenario step in the comparison story. */
+function ComparisonStep({
+  index,
+  title,
+  rows,
+  children,
+}: {
+  index: number;
+  title: string;
+  rows: Array<[string, string]>;
+  children?: React.ReactNode;
+}) {
   return (
-    <tr className="border-t border-slate-100">
-      <td className="px-2 py-1.5 font-medium text-slate-600">{label}</td>
-      <td className="px-2 py-1.5 text-slate-800">{a}</td>
-      <td className="px-2 py-1.5 text-slate-800">{b}</td>
-    </tr>
+    <li className="rounded border border-slate-200 bg-slate-50 px-3 py-2" data-testid={`comparison-step-${index}`}>
+      <p className="text-sm font-semibold text-slate-800">
+        <span className="mr-1 font-bold text-sky-700">{index}.</span>
+        {title}
+      </p>
+      <dl className="mt-1 grid gap-x-4 gap-y-0.5 text-xs text-slate-700 sm:grid-cols-2">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-2">
+            <dt className="text-slate-500">{label}</dt>
+            <dd className="text-right text-slate-800">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {children}
+    </li>
   );
 }

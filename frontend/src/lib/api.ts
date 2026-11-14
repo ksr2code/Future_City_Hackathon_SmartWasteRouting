@@ -304,11 +304,16 @@ export interface RouteResponse {
 }
 
 /**
- * §5.2.2 ComparisonScenario — one side (fixed-order naive or optimised) of the
- * M12 demo comparison served by GET /api/comparison.
+ * §5.2.2 ComparisonScenario (v2 2026-11-14) — one comparison scenario
+ * (`naive_sweep_all` / `naive_sweep_selected` / `ortools`). Per-stop/per-kg
+ * metrics are `null` on zero denominators (e.g. fleet exhausted before any
+ * stop) — never render a fabricated 0. The `ortools` scenario's distance/
+ * duration/per-metric values are medians across `runs` solves (§4.7).
  */
+export type ComparisonMethod = "naive_sweep_all" | "naive_sweep_selected" | "ortools";
+
 export interface ComparisonScenario {
-  method: "naive_fixed_order" | "ortools";
+  method: ComparisonMethod;
   status: string;
   distance_m: number;
   duration_min: number;
@@ -321,21 +326,40 @@ export interface ComparisonScenario {
   unserved_count: number;
   recommended_trucks: number;
   fleet_basis: { ceil_by_volume: number; ceil_by_weight: number };
+  distance_per_stop_m: number | null;
+  distance_per_kg_m: number | null;
+}
+
+/** §5.2.2 gains (metres); `null` when a difference would be fabricated. */
+export interface ComparisonGains {
+  selection_gain_m: number | null; // naive_sweep_all − naive_sweep_selected
+  routing_gain_m: number | null; // naive_sweep_selected − ortools (median)
+  total_gain_m: number | null;
+}
+
+/** §4.7 repetition protocol over `runs` optimised solves. */
+export interface OptimisedDeterminism {
+  runs: number;
+  mode: "identical" | "median_of_runs";
+  distance_m_median: number;
+  distance_m_min: number;
+  distance_m_max: number;
 }
 
 /**
- * §5.2.2 ComparisonResponse. v1 echoes fixed CLI defaults (as_of/target/
- * horizon, method "persistence"). Optimised totals vary slightly run-to-run
- * (GLS, §4.4) — noted in `assumptions`. `distance_provenance` is
- * `haversine_straight_line_derived` — never present as road distance.
+ * §5.2.2 ComparisonResponse (v2). Echoes fixed CLI defaults (as_of/target/
+ * horizon, method "persistence"). `scenarios` is in the fixed §4.7 order
+ * (`naive_sweep_all`, `naive_sweep_selected`, `ortools`). `distance_provenance`
+ * is `haversine_straight_line_derived` — never present as road distance.
  */
 export interface ComparisonResponse {
   as_of_date: string;
   target_date: string;
   horizon_days: number;
   method: string;
-  naive: ComparisonScenario;
-  optimised: ComparisonScenario & { selected_count: number; skipped_count: number };
+  scenarios: ComparisonScenario[];
+  gains: ComparisonGains;
+  optimised_determinism: OptimisedDeterminism;
   distance_provenance: DistanceProvenance;
   assumptions: string[];
 }
@@ -443,9 +467,9 @@ export async function runRoute(payload: RouteRequest): Promise<RouteResponse> {
 }
 
 /**
- * GET /api/comparison (§5.2.2): naive fixed-order vs optimised summary on the
- * active dataset. 404 when no dataset is loaded (§5.3) — callers must turn
- * that into an empty state, not an error.
+ * GET /api/comparison (§5.2.2 v2): three scenarios (fixed-order sweeps vs
+ * optimised) on the active dataset. 404 when no dataset is loaded (§5.3) —
+ * callers must turn that into an empty state, not an error.
  */
 export async function fetchComparison(): Promise<ComparisonResponse> {
   return request<ComparisonResponse>("/api/comparison");

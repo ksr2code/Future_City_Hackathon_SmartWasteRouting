@@ -19,5 +19,13 @@ These are **observed data**, not synthetic — they pin the real wire shapes:
   10 assumptions. Pins the real wire shapes: FLAT unserved entries
   (`{location_id, material_type, reason}` — no `stop_key`) and
   `load_progression` as `[volume_litres, weight_kg]` tuple arrays.
+- `comparison.json` — `GET /api/comparison` 200 (as_of `2026-09-30`; capture
+  2026-11-14, **v2** contracts §5.2.2): `scenarios[]` in the fixed §4.7 order
+  (`naive_sweep_all` 230,865 m / 78 served / 5.6 m/kg; `naive_sweep_selected`
+  262,995 m / 63 / 5.0 m/kg; `ortools` median 57,657 m / 40 / 2.4 m/kg),
+  `gains` selection −32,130 / routing +205,338 / total +173,208,
+  `optimised_determinism` `{runs: 5, mode: "identical"}`. Pins the v2 wire
+  shape: **no** top-level `naive`/`optimised` keys (removed in v2), nullable
+  per-metrics, distances `haversine_straight_line_derived`.
 
 Location IDs are anonymized challenge identifiers; no personal data.

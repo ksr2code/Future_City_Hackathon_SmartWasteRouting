@@ -34,11 +34,11 @@ const en = {
   "overview.keynum.containers.title": "Containers expected to need emptying",
   "overview.keynum.containers.note":
     "Model prediction for {date}: selected by the recommendation below — not a measured fact.",
-  "overview.keynum.distance.title": "Planned distance: fixed vs optimised",
-  "overview.keynum.distance.fixed": "Fixed schedule",
+  "overview.keynum.distance.title": "Planned distance: sweep-all vs optimised",
+  "overview.keynum.distance.fixed": "Sweep all stops",
   "overview.keynum.distance.optimised": "Optimised",
   "overview.keynum.distance.savings":
-    "Derived saving (fixed − optimised) / fixed: {pct}",
+    "Derived saving (total gain ÷ sweep-all distance): {pct}",
 
   "overview.how.title": "How it works",
   "overview.how.step1": "Upload fill-level readings",
@@ -57,13 +57,32 @@ const en = {
   "overview.recommendation.caption":
     "What this shows: which containers are recommended for the next collection round and why. Why it matters: overfull containers annoy residents — this turns readings into an explainable work list.",
 
-  "overview.beforeafter.title": "Fixed schedule vs optimised routes",
+  "overview.beforeafter.title": "From sweeping everything to optimised routes",
   "overview.beforeafter.caption":
-    "What this shows: a fixed-order collection run against the optimised plan on the same containers. Why it matters: less distance and fewer trucks for the same job (distances are straight-line estimates, not road kilometres).",
-  "overview.beforeafter.fixed": "Fixed schedule (naive)",
-  "overview.beforeafter.optimised": "Optimised (OR-Tools)",
-  "overview.beforeafter.savings": "Derived saving: {pct}",
+    "What this shows: three scenarios on the same dataset — the status-quo sweep over every stop, a sweep over only the recommended stops, and optimised routing. Why it matters: distance per kg collected compares the scenarios fairly (they serve different numbers of stops); raw distances do not. Distances are straight-line estimates, not road kilometres.",
+  "overview.compare.step1.title": "Status quo: sweep every stop",
+  "overview.compare.step1.short": "Sweep all stops",
+  "overview.compare.step2.title": "Selection effect: sweep only the recommended stops",
+  "overview.compare.step2.short": "Sweep selected stops",
+  "overview.compare.step3.title": "Optimised routes (OR-Tools)",
+  "overview.compare.step3.short": "Optimised (OR-Tools)",
+  "overview.compare.step3.medianSuffix": "median of {runs} solves",
+  "overview.compare.selectionGain": "Selection gain (sweep-all → selection sweep): {gain}",
+  "overview.compare.selectionGainNegative":
+    "Negative = the selection sweep covered MORE distance than the sweep-all run — selection did not pay off for distance here.",
+  "overview.compare.routingGain": "Routing gain (selection sweep → optimised): {gain}",
+  "overview.compare.totalGain": "Total distance gain (status quo → optimised): {gain}",
+  "overview.compare.gainUnavailable":
+    "Gain not available for this run — no usable optimised solution to compare against.",
+  "overview.compare.perKgNote":
+    "Distance per kg collected is the like-for-like comparison across these scenarios (they serve different numbers of stops); raw distances are not comparable. Distances are straight-line estimates, not road kilometres.",
+  "overview.compare.savings": "Derived saving share (total gain ÷ status-quo distance): {pct}",
+  "overview.compare.determinism.identical":
+    "Optimised result deterministic: identical distance across {runs} solves ({median}).",
+  "overview.compare.determinism.medianOfRuns":
+    "Optimised distance varied across {runs} solves (wall-clock solver variance): median {median}, range {min}–{max}. The median is shown above.",
   "col.distance": "Distance",
+  "col.distancePerKg": "Distance per kg",
   "col.duration": "Duration",
   "col.trucks": "Trucks needed",
   "col.stopsServed": "Stops served",
@@ -132,11 +151,11 @@ const de: Record<TranslationKey, string> = {
   "overview.keynum.containers.title": "Behälter, die voraussichtlich zu leeren sind",
   "overview.keynum.containers.note":
     "Modellprognose für {date}: von der Empfehlung unten ausgewählt — kein gemessener Fakt.",
-  "overview.keynum.distance.title": "Geplante Strecke: fest vs. optimiert",
-  "overview.keynum.distance.fixed": "Fester Plan",
+  "overview.keynum.distance.title": "Geplante Strecke: Alles-Sweep vs. optimiert",
+  "overview.keynum.distance.fixed": "Alle Stopps abfahren",
   "overview.keynum.distance.optimised": "Optimiert",
   "overview.keynum.distance.savings":
-    "Abgeleitete Ersparnis (fest − optimiert) / fest: {pct}",
+    "Abgeleitete Ersparnis (Gesamtgewinn ÷ Sweep-alle-Stopp-Strecke): {pct}",
 
   "overview.how.title": "So funktioniert es",
   "overview.how.step1": "Füllstands-Messungen hochladen",
@@ -155,13 +174,32 @@ const de: Record<TranslationKey, string> = {
   "overview.recommendation.caption":
     "Was das zeigt: welche Behälter für die nächste Sammelrunde empfohlen werden und warum. Warum das zählt: übervolle Behälter ärgern Anwohner — daraus wird eine begründete Arbeitsliste.",
 
-  "overview.beforeafter.title": "Fester Plan vs. optimierte Routen",
+  "overview.beforeafter.title": "Vom Alles-Abfahren zur optimierten Route",
   "overview.beforeafter.caption":
-    "Was das zeigt: ein Ablauf in fester Reihenfolge gegen den optimierten Plan an denselben Behältern. Warum das zählt: weniger Strecke und weniger Fahrzeuge für dieselbe Aufgabe (Entfernungen sind Luftlinien-Schätzungen, keine Straßen-Kilometer).",
-  "overview.beforeafter.fixed": "Fester Plan (naiv)",
-  "overview.beforeafter.optimised": "Optimiert (OR-Tools)",
-  "overview.beforeafter.savings": "Abgeleitete Ersparnis: {pct}",
+    "Was das zeigt: drei Szenarien auf demselben Datensatz — der Status-quo-Sweep über alle Stopps, ein Sweep nur über die empfohlenen Stopps und optimierte Routen. Warum das zählt: Strecke pro kg vergleich die Szenarien fair (sie bedienen unterschiedlich viele Stopps); rohe Strecken sind nicht vergleichbar. Entfernungen sind Luftlinien-Schätzungen, keine Straßen-Kilometer.",
+  "overview.compare.step1.title": "Status quo: alle Stopps abfahren",
+  "overview.compare.step1.short": "Alle Stopps",
+  "overview.compare.step2.title": "Auswahl-Effekt: nur die empfohlenen Stopps abfahren",
+  "overview.compare.step2.short": "Ausgewählte Stopps",
+  "overview.compare.step3.title": "Optimierte Routen (OR-Tools)",
+  "overview.compare.step3.short": "Optimiert (OR-Tools)",
+  "overview.compare.step3.medianSuffix": "Median aus {runs} Läufen",
+  "overview.compare.selectionGain": "Auswahl-Gewinn (Sweep-alle → Auswahl-Sweep): {gain}",
+  "overview.compare.selectionGainNegative":
+    "Negativ = der Auswahl-Sweep hatte eine GRÖSSERE Strecke als der Sweep-alle-Lauf — die Auswahl hat sich hier (bei der Strecke) nicht gelohnt.",
+  "overview.compare.routingGain": "Routing-Gewinn (Auswahl-Sweep → optimiert): {gain}",
+  "overview.compare.totalGain": "Gesamt-Strecken-Gewinn (Status quo → optimiert): {gain}",
+  "overview.compare.gainUnavailable":
+    "Gewinn für diesen Lauf nicht verfügbar — keine nutzbare optimierte Lösung zum Vergleich.",
+  "overview.compare.perKgNote":
+    "Strecke pro kg ist der faire Vergleich zwischen diesen Szenarien (sie bedienen unterschiedlich viele Stopps); rohe Strecken sind nicht vergleichbar. Entfernungen sind Luftlinien-Schätzungen, keine Straßen-Kilometer.",
+  "overview.compare.savings": "Abgeleitete Ersparnis (Gesamtgewinn ÷ Status-quo-Strecke): {pct}",
+  "overview.compare.determinism.identical":
+    "Optimiertes Ergebnis deterministisch: identische Strecke über {runs} Läufe ({median}).",
+  "overview.compare.determinism.medianOfRuns":
+    "Optimierte Strecke variierte über {runs} Läufe (Wall-Clock-Solver-Varianz): Median {median}, Spanne {min}–{max}. Oben ist der Median gezeigt.",
   "col.distance": "Strecke",
+  "col.distancePerKg": "Strecke pro kg",
   "col.duration": "Dauer",
   "col.trucks": "Fahrzeuge benötigt",
   "col.stopsServed": "Stopps bedient",
