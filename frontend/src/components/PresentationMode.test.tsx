@@ -146,6 +146,35 @@ describe("PresentationMode — slides & navigation", () => {
     expect(text).toContain("NOT road distance");
   });
 
+  it("slide 5 words an exactly-zero cost delta neutrally, never as ± costs", async () => {
+    // costDelta derives from cost_eur_per_year — equalise THAT (250,000 both
+    // → delta 0). Totals may differ; the delta line keys on per-year.
+    const equalCost = {
+      ...scenariosFixture,
+      strategies: scenariosFixture.strategies.map((s) => ({
+        ...s,
+        cost_eur_per_year: 250000,
+      })),
+    };
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/scenarios": () => jsonResponse(equalCost),
+    });
+    render(
+      <PresentationMode lang="en" summary={summaryWithFillStats} onClose={() => {}} />,
+    );
+    await flush();
+    await flush();
+
+    for (let i = 0; i < 4; i += 1) await pressKey("ArrowRight");
+    const text = document.body.textContent ?? "";
+    // Zero-delta branch (delta = 250,000 − 250,000 = 0): neutral wording.
+    expect(text).toContain("Same simulated cost for today and the plan");
+    expect(text).not.toContain("costs MORE");
+    expect(text).not.toContain("costs LESS");
+    expect(text).not.toContain("−0 EUR/year");
+  });
+
   it("Esc closes via onClose; ArrowRight is bounded at the last slide", async () => {
     stubRoutes(happyRoutes());
     const onClose = vi.fn();

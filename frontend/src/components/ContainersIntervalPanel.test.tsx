@@ -23,7 +23,16 @@ function stubDays(payload: unknown, status = 200): Mock {
 
 describe("ContainersIntervalPanel — rows", () => {
   it("renders rate/interval/days-to-full with 'at least' markers and reasons", async () => {
-    stubDays(daysToFullFixture);
+    // One fixture row uses a SHORT id (≤ 13 chars) — must render without a
+    // trailing ellipsis (review pass 2: ellipsis only when actually truncated).
+    const withShortId = {
+      ...daysToFullFixture,
+      series: [
+        { ...daysToFullFixture.series[0], location_id: "short-id-01" },
+        ...daysToFullFixture.series.slice(1),
+      ],
+    };
+    stubDays(withShortId);
     render(<ContainersIntervalPanel lang="en" datasetVersion={0} />);
     await flush();
     await flush();
@@ -34,6 +43,11 @@ describe("ContainersIntervalPanel — rows", () => {
     expect(rows).toContain("34.0 d");
     expect(rows).toContain("43.2 d");
     expect(rows).toContain("2026-10-23"); // predicted_full_date, never clamped
+    // Short id rendered whole — no ellipsis appended.
+    expect(rows).toContain("short-id-01");
+    expect(rows).not.toContain("short-id-01…");
+    // Long id still truncates with the ellipsis.
+    expect(rows).toContain("11111111-2222…");
     const markers = document.querySelectorAll('[data-testid="interval-at-least"]');
     expect(markers.length).toBe(1); // only the is_lower_bound row
     // White row has no estimate — reason shown, never fabricated.

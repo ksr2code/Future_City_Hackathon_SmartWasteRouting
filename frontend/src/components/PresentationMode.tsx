@@ -325,15 +325,21 @@ export function PresentationMode({ lang, summary, onClose }: PresentationModePro
                   </span>
                 </p>
                 {costDelta !== null ? (
-                  <p className="text-2xl text-amber-200">
-                    {costDelta > 0
-                      ? tf(lang, "overview.toggle.flagCostMoreServiceBetter", {
-                          delta: `+${Math.round(costDelta).toLocaleString("en-US")} EUR/year`,
-                        })
-                      : tf(lang, "overview.toggle.flagCostLessServiceBetter", {
-                          delta: `−${Math.abs(Math.round(costDelta)).toLocaleString("en-US")} EUR/year`,
-                        })}
-                  </p>
+                  costDelta === 0 ? (
+                    <p className="text-2xl text-slate-300">
+                      {t(lang, "presentation.s5.sameCost")}
+                    </p>
+                  ) : (
+                    <p className="text-2xl text-amber-200">
+                      {costDelta > 0
+                        ? tf(lang, "overview.toggle.flagCostMoreServiceBetter", {
+                            delta: `+${Math.round(costDelta).toLocaleString("en-US")} EUR/year`,
+                          })
+                        : tf(lang, "overview.toggle.flagCostLessServiceBetter", {
+                            delta: `−${Math.abs(Math.round(costDelta)).toLocaleString("en-US")} EUR/year`,
+                          })}
+                    </p>
+                  )
                 ) : null}
                 <BasisLabel>{t(lang, "overview.toggle.simBasis")}</BasisLabel>
               </>

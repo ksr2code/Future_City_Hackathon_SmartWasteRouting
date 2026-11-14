@@ -40,6 +40,66 @@ const cheaperButWorse: ScenarioResponse = {
   ],
 };
 
+/** Cost more, service EQUAL (delta 0) — must use the no-gain wording, not
+ * gain language (review minor #4). Plan share = today's 14.4. */
+const costMoreNoGain: ScenarioResponse = {
+  ...scenariosFixture,
+  strategies: [
+    scenariosFixture.strategies[0],
+    {
+      ...scenariosFixture.strategies[1],
+      cost_eur_total: 700000,
+      cost_eur_per_year: 400000,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 2.4,
+        share_emptyings_full_or_overfull_pct: 14.4,
+        max_fill_pct: 300.0,
+      },
+    },
+  ],
+};
+
+/** Worst case: costs MORE and service WORSE (share 20.0 vs 14.4 → sd +5.6)
+ * — red "dominated on both" wording (adjudication matrix case 1). */
+const costMoreServiceWorse: ScenarioResponse = {
+  ...scenariosFixture,
+  strategies: [
+    scenariosFixture.strategies[0],
+    {
+      ...scenariosFixture.strategies[1],
+      cost_eur_total: 700000,
+      cost_eur_per_year: 400000,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 9.0,
+        share_emptyings_full_or_overfull_pct: 20.0,
+        max_fill_pct: 300.0,
+      },
+    },
+  ],
+};
+
+/** Costs LESS, service UNCHANGED (share 14.4 → sd 0; cost 200,000 →
+ * delta −44,126 EUR/year) — emerald "unchanged" wording (matrix case 5). */
+const costLessNoChange: ScenarioResponse = {
+  ...scenariosFixture,
+  strategies: [
+    scenariosFixture.strategies[0],
+    {
+      ...scenariosFixture.strategies[1],
+      cost_eur_total: 200000,
+      cost_eur_per_year: 200000,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 2.4,
+        share_emptyings_full_or_overfull_pct: 14.4,
+        max_fill_pct: 300.0,
+      },
+    },
+  ],
+};
+
 describe("TodayPlanToggle — cost + service together (§6)", () => {
   it("renders the observed anchor and the today block with service beside cost; POSTs server defaults", async () => {
     const fetchMock = stubScenarios(scenariosFixture);
@@ -99,6 +159,56 @@ describe("TodayPlanToggle — cost + service together (§6)", () => {
     const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
     expect(tradeoff).toContain("costs LESS");
     expect(tradeoff).toContain("WORSE");
+  });
+
+  it("words cost-more-with-zero-service-gain as NO GAIN, never as an improvement (review #4)", async () => {
+    stubScenarios(costMoreNoGain);
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    await click(document.querySelector('[data-testid="toggle-plan"]'));
+
+    const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
+    // Derived delta: 400,000 − 244,126.07 = +155,874 EUR/year.
+    expect(tradeoff).toContain("+155,874 EUR/year");
+    expect(tradeoff).toContain("NO simulated service gain");
+    // The gain-improvement phrasing must NOT appear on a zero-gain delta.
+    expect(tradeoff).not.toContain("service improves");
+    expect(tradeoff).toContain("0.0 pp"); // service delta is exactly zero
+  });
+
+  it("flags cost-more-AND-service-worse as dominated on both (red, matrix case 1)", async () => {
+    stubScenarios(costMoreServiceWorse);
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    await click(document.querySelector('[data-testid="toggle-plan"]'));
+
+    const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
+    expect(tradeoff).toContain("costs MORE");
+    expect(tradeoff).toContain("WORSE");
+    expect(tradeoff).toContain("dominated on both");
+    // Gain language must never appear in the worst case.
+    expect(tradeoff).not.toContain("service improves");
+    // Service delta: 20.0 − 14.4 = +5.6 pp (worse on the bad-service metric).
+    expect(tradeoff).toContain("+5.6 pp");
+  });
+
+  it("flags cost-less-with-unchanged-service as unchanged, not an improvement (matrix case 5)", async () => {
+    stubScenarios(costLessNoChange);
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    await click(document.querySelector('[data-testid="toggle-plan"]'));
+
+    const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
+    // Derived delta: 200,000 − 244,126.07 = −44,126 EUR/year.
+    expect(tradeoff).toContain("costs LESS");
+    expect(tradeoff).toContain("unchanged");
+    expect(tradeoff).toContain("0.0 pp");
   });
 
   it("renders German strings with parity (anchor + flags)", async () => {

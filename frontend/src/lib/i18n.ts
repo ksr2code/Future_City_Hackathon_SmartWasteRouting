@@ -136,6 +136,14 @@ const en = {
     "Warning: the plan costs LESS (delta {delta}) while simulated service is WORSE — cheaper is not automatically better.",
   "overview.toggle.flagCostMoreServiceBetter":
     "Honest tradeoff: the plan costs MORE (delta {delta}) — shown straight; the simulated service improves, which is the point.",
+  "overview.toggle.flagCostMoreNoGain":
+    "The plan costs MORE (delta {delta}) with NO simulated service gain — shown straight, no improvement to weigh it against.",
+  "overview.toggle.flagCostMoreServiceWorse":
+    "Warning: the plan costs MORE (delta {delta}) and the simulated service is WORSE — dominated on both cost and service.",
+  "overview.toggle.flagCostLessNoServiceChange":
+    "The plan costs LESS (delta {delta}) with the simulated service unchanged.",
+  "overview.toggle.flagSameCost":
+    "Same simulated cost (delta {delta}) — the service line below gives the direction.",
   "overview.toggle.flagCostLessServiceBetter":
     "The plan costs LESS (delta {delta}) while the simulated service improves.",
   "overview.toggle.serviceDelta":
@@ -239,6 +247,8 @@ const en = {
   "presentation.s4.basis": "Basis: model prediction — not a measurement.",
   "presentation.s5.title": "Today vs. plan: cost and service",
   "presentation.s5.overflow": "overflow container-days",
+  "presentation.s5.sameCost":
+    "Same simulated cost for today and the plan — the service lines above give the direction.",
   "presentation.s6.title": "Distance: status quo vs optimised",
   "presentation.s6.basis":
     "Distances are straight-line estimates — NOT road distance; the saving share is derived from the API gains.",
@@ -406,6 +416,14 @@ const de: Record<TranslationKey, string> = {
     "Warnung: der Plan kostet WENIGER (Differenz {delta}), bei WENIGER gutem simuliertem Service — billiger ist nicht automatisch besser.",
   "overview.toggle.flagCostMoreServiceBetter":
     "Ehrlicher Zielkonflikt: der Plan kostet MEHR (Differenz {delta}) — ehrlich gezeigt; der simulierte Service verbessert sich, das ist der Sinn.",
+  "overview.toggle.flagCostMoreNoGain":
+    "Der Plan kostet MEHR (Differenz {delta}) OHNE simulierten Service-Gewinn — ehrlich gezeigt, keine Verbesserung, die man dagegen aufwiegen könnte.",
+  "overview.toggle.flagCostMoreServiceWorse":
+    "Warnung: der Plan kostet MEHR (Differenz {delta}) und der simulierte Service ist SCHLECHTER — in Kosten und Service dominiert.",
+  "overview.toggle.flagCostLessNoServiceChange":
+    "Der Plan kostet WENIGER (Differenz {delta}) bei unverändertem simuliertem Service.",
+  "overview.toggle.flagSameCost":
+    "Gleiche simulierte Kosten (Differenz {delta}) — die Service-Zeile unten gibt die Richtung.",
   "overview.toggle.flagCostLessServiceBetter":
     "Der Plan kostet WENIGER (Differenz {delta}) und der simulierte Service verbessert sich.",
   "overview.toggle.serviceDelta":
@@ -509,6 +527,8 @@ const de: Record<TranslationKey, string> = {
   "presentation.s4.basis": "Basis: Modellprognose — keine Messung.",
   "presentation.s5.title": "Heute vs. Plan: Kosten und Service",
   "presentation.s5.overflow": "Überlauf-Behälter-Tage",
+  "presentation.s5.sameCost":
+    "Gleiche simulierte Kosten für heute und Plan — die Service-Zeilen oben geben die Richtung.",
   "presentation.s6.title": "Strecke: Status quo vs. optimiert",
   "presentation.s6.basis":
     "Entfernungen sind Luftlinien-Schätzungen — KEINE Straßen-Kilometer; die Ersparnis ist aus den API-Gewinnen abgeleitet.",

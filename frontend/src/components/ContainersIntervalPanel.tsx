@@ -199,7 +199,9 @@ export function ContainersIntervalPanel({ lang, datasetVersion }: ContainersInte
                   {visible.map((row) => (
                     <tr key={`${row.location_id}·${row.material_type}`} className="border-t border-slate-100">
                       <td className="px-2 py-1.5 font-mono" title={row.location_id}>
-                        {row.location_id.slice(0, 13)}…
+                        {row.location_id.length <= 13
+                          ? row.location_id
+                          : `${row.location_id.slice(0, 13)}…`}
                       </td>
                       <td className="px-2 py-1.5">
                         <MaterialBadge material={row.material_type} />

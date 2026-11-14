@@ -195,15 +195,26 @@ export function TodayPlanToggle({
   let flagKey: TranslationKey | null = null;
   let flagClass = "";
   if (costDelta !== null && serviceDelta !== null) {
-    if (costDelta < 0 && serviceDelta > 0) {
+    // serviceDelta is on a BAD-service metric (share full-or-overfull):
+    // > 0 = service WORSE, < 0 = better, 0 = unchanged (review #4 adjudication).
+    if (costDelta === 0) {
+      flagKey = "overview.toggle.flagSameCost";
+      flagClass = "border-slate-300 bg-slate-100 text-slate-800";
+    } else if (costDelta > 0 && serviceDelta > 0) {
+      flagKey = "overview.toggle.flagCostMoreServiceWorse";
+      flagClass = "border-red-300 bg-red-50 text-red-900";
+    } else if (costDelta > 0 && serviceDelta === 0) {
+      flagKey = "overview.toggle.flagCostMoreNoGain";
+      flagClass = "border-amber-300 bg-amber-50 text-amber-900";
+    } else if (costDelta > 0) {
+      flagKey = "overview.toggle.flagCostMoreServiceBetter";
+      flagClass = "border-amber-300 bg-amber-50 text-amber-900";
+    } else if (serviceDelta > 0) {
       flagKey = "overview.toggle.flagCostLessServiceWorse";
       flagClass = "border-red-300 bg-red-50 text-red-900";
-    } else if (costDelta > 0 && serviceDelta < 0) {
-      flagKey = "overview.toggle.flagCostMoreServiceBetter";
-      flagClass = "border-amber-300 bg-amber-50 text-amber-900";
-    } else if (costDelta > 0 && serviceDelta >= 0) {
-      flagKey = "overview.toggle.flagCostMoreServiceBetter";
-      flagClass = "border-amber-300 bg-amber-50 text-amber-900";
+    } else if (serviceDelta === 0) {
+      flagKey = "overview.toggle.flagCostLessNoServiceChange";
+      flagClass = "border-emerald-300 bg-emerald-50 text-emerald-900";
     } else {
       flagKey = "overview.toggle.flagCostLessServiceBetter";
       flagClass = "border-emerald-300 bg-emerald-50 text-emerald-900";

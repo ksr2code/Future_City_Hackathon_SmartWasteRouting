@@ -29,9 +29,9 @@ Reason codes — no estimate is ever fabricated; ``days_to_full`` is
 - ``no_numeric_fill``: candidates exist but none has a numeric fill.
 - ``zero_rate``: the numeric candidates' median rate is exactly 0 pp/day
   (all contributing fills are 0) — ``target_pct / rate`` is undefined, so
-  no finite estimate exists. Contract deviation: §5.2.3 lists three
-  reasons; this fourth value is surfaced instead of fabricating a number
-  (flagged for architect review).
+  no finite estimate exists. Fourth reason beyond the §5.2.3 v2 three:
+  architect-approved addendum (2026-11-14), recorded in contracts §5.2.3;
+  a number is never fabricated.
 
 Aggregate ``stats``/``stats_by_material`` cover only series with an
 estimate; ``lower_bound_share_pct`` is the share of estimates flagged
