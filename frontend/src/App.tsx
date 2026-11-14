@@ -17,6 +17,7 @@ import { KpiOverview } from "./components/KpiOverview";
 import { RoutePanel } from "./components/RoutePanel";
 import { SyntheticDataBanner } from "./components/SyntheticDataBanner";
 import { UploadPanel } from "./components/UploadPanel";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 /**
  * Operator dashboard (M11). Sections: upload → KPI overview → containers →
@@ -141,30 +142,44 @@ export default function App() {
       ) : null}
 
       <div className="space-y-4">
+        {/* One boundary per main view: a render error degrades that view to a
+            visible retryable message — never a blank dashboard (M11). */}
         <div className="grid gap-4 xl:grid-cols-2">
-          <UploadPanel onUploaded={handleUploaded} />
-          <ConfigEditor
-            config={config}
-            loading={configLoading}
-            error={configError}
+          <ErrorBoundary label="Upload">
+            <UploadPanel onUploaded={handleUploaded} />
+          </ErrorBoundary>
+          <ErrorBoundary label="Demo config">
+            <ConfigEditor
+              config={config}
+              loading={configLoading}
+              error={configError}
+              policyOverride={policyOverride}
+              routingOverride={routingOverride}
+              onPolicyChange={setPolicyOverride}
+              onRoutingChange={setRoutingOverride}
+            />
+          </ErrorBoundary>
+        </div>
+        <ErrorBoundary label="Dataset overview">
+          <KpiOverview summary={summary} loading={summaryLoading} error={summaryError} />
+        </ErrorBoundary>
+        <ErrorBoundary label="Containers">
+          <ContainerList datasetVersion={datasetVersion} />
+        </ErrorBoundary>
+        <ErrorBoundary label="Forecast & candidates">
+          <CandidatesPanel
+            defaultAsOf={summary?.date_max ?? null}
+            policyOverride={policyOverride}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary label="Route proposal">
+          <RoutePanel
+            defaultAsOf={summary?.date_max ?? null}
             policyOverride={policyOverride}
             routingOverride={routingOverride}
-            onPolicyChange={setPolicyOverride}
-            onRoutingChange={setRoutingOverride}
+            onRoute={handleRoute}
           />
-        </div>
-        <KpiOverview summary={summary} loading={summaryLoading} error={summaryError} />
-        <ContainerList datasetVersion={datasetVersion} />
-        <CandidatesPanel
-          defaultAsOf={summary?.date_max ?? null}
-          policyOverride={policyOverride}
-        />
-        <RoutePanel
-          defaultAsOf={summary?.date_max ?? null}
-          policyOverride={policyOverride}
-          routingOverride={routingOverride}
-          onRoute={handleRoute}
-        />
+        </ErrorBoundary>
       </div>
 
       <footer className="mt-6 text-xs text-slate-400">

@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { jsonResponse } from "../test/dom";
 import { routeResponseFixture, selectionFixture, summaryFixture } from "../test/fixtures";
+import realUploadCapture from "../test/fixtures/real-capture/upload.json";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -44,20 +45,25 @@ describe("api client (§5)", () => {
     expect((error as ApiError).message).toContain("404");
   });
 
-  it("uploadDataset POSTs multipart /api/datasets with the file", async () => {
-    const fetchMock = stubJsonFetch(() =>
-      jsonResponse({ summary: summaryFixture, errors: [], warnings: [] }),
-    );
+  it("uploadDataset POSTs multipart /api/datasets with the file and parses the flat capture shape", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(realUploadCapture));
 
     const file = new File(["location_id,material_type,date,fill_level"], "glass.csv", {
       type: "text/csv",
     });
-    await uploadDataset(file);
+    const response = await uploadDataset(file);
 
     const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
     expect(url).toBe("/api/datasets");
     expect(init?.method).toBe("POST");
     expect(init?.body).toBeInstanceOf(FormData);
+    // Flat §5.1 shape (real capture 2026-11-14): summary fields at top level,
+    // no nested `summary` key — the blank-page regression pinned here.
+    expect("summary" in response).toBe(false);
+    expect(response.n_rows).toBe(11701);
+    expect(response.source_name).toBe("glass_fill_levels_anonymized_f.csv");
+    expect(response.errors).toEqual([]);
+    expect(response.warnings).toEqual([]);
   });
 
   it("runCandidates POSTs JSON with policy_config override", async () => {

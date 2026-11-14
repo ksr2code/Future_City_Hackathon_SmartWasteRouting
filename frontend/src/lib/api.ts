@@ -45,9 +45,14 @@ export interface ApiIssue {
   value?: unknown;
 }
 
-/** POST /datasets response: summary + full error/warning lists (§5.1). */
-export interface UploadResponse {
-  summary: DatasetSummary;
+/**
+ * POST /datasets response: the FLAT DatasetSummary fields plus the full
+ * error/warning lists — §5.1 "DatasetSummary + errors/warnings"; backend
+ * `DatasetUploadResponse(DatasetSummaryResponse)` inherits the summary fields.
+ * There is no nested `summary` key (observed capture 2026-11-14:
+ * test/fixtures/real-capture/upload.json — the blank-page bug read one).
+ */
+export interface UploadResponse extends DatasetSummary {
   errors: ApiIssue[];
   warnings: ApiIssue[];
 }

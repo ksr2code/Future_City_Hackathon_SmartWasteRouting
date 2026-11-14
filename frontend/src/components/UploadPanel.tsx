@@ -33,7 +33,8 @@ export function UploadPanel({ onUploaded }: { onUploaded: (summary: DatasetSumma
     try {
       const response = await uploadDataset(file);
       setResult(response);
-      onUploaded(response.summary);
+      // The upload response IS a DatasetSummary (flat, plus errors/warnings).
+      onUploaded(response);
     } catch (err) {
       setResult(null);
       setError(err instanceof ApiError ? err.message : String(err));
@@ -105,7 +106,8 @@ export function UploadPanel({ onUploaded }: { onUploaded: (summary: DatasetSumma
           </div>
         ) : (
           <div className="mt-3 space-y-2" data-testid="upload-summary">
-            <SummaryLines summary={result.summary} />
+            {/* UploadResponse extends DatasetSummary — pass it directly. */}
+            <SummaryLines summary={result} />
             {result.warnings.length > 0 ? (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 <p className="font-semibold">{result.warnings.length} warning(s):</p>
