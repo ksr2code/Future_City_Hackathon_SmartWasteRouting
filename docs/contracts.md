@@ -319,6 +319,8 @@ prototype limitation, not a persistence claim.
 | POST | `/api/forecasts` | run baselines (§2) | `ForecastRequest` → `ForecastResponse` |
 | POST | `/api/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
 | POST | `/api/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
+| GET | `/api/comparison` | naive fixed-order vs optimised summary (M12 demo story) | — → `ComparisonResponse`; 404 if no dataset |
+| POST | `/api/datasets/demo` | load server-side demo CSV (path fixed server-side, never client-supplied) | — → `DatasetUploadResponse`; 404 if file absent; 422 on §1 errors (same rules as upload) |
 
 Routers mount under the **`/api` prefix**; the Vite dev proxy forwards `/api/*`
 to the backend port. `horizon_days` is optional, default **28**
@@ -361,6 +363,45 @@ The §4.3 names are the internal domain shapes; the API serialises as follows
   weight_kg][]`.
 - Route `sequence` nodes carry a `node_type` discriminator:
   `"depot" | "disposal" | "stop"`.
+
+### 5.2.2 New shapes (user-approved 2026-11-14, overview/demo work)
+
+`DatasetSummary` (both `/api/summary` and upload responses) gains:
+
+```text
+FillStats = { share_readings_full_or_above_pct: float,  # 1 d.p., numeric fill >= threshold_pct
+              share_readings_overfull_pct: float,       # overfull rows / n_rows (§1.1: never coerced)
+              share_readings_empty_pct: float,          # numeric fill == 0
+              threshold_pct: int }                      # echoed; 80 = §3.1 default [demo assumption]
+```
+
+Shares are percentages of `n_rows`; overfull rows count only in the overfull
+share. These are shares of **readings**, not emptying events — the data has
+no collection events [observed]; never worded as "emptyings".
+
+```text
+ComparisonScenario = { method: "naive_fixed_order" | "ortools", status,
+                       distance_m, duration_min, stops_served, stops_total,
+                       vehicles_available, vehicles_used,
+                       collected_volume_litres, collected_weight_kg,
+                       unserved_count, recommended_trucks,
+                       fleet_basis: {ceil_by_volume, ceil_by_weight} }
+ComparisonResponse = { as_of_date, target_date, horizon_days,   # v1 fixed CLI defaults, echoed
+                       method: "persistence",
+                       naive: ComparisonScenario,
+                       optimised: ComparisonScenario
+                         + { selected_count, skipped_count },
+                       distance_provenance, assumptions: [labels] }
+```
+
+- `/api/comparison` reuses the M12 comparison core (refactor
+  `src/api/compare_demo.py` so CLI and endpoint share one function; CLI
+  behaviour unchanged). Optimised totals vary slightly run-to-run (GLS, §4.4)
+  — noted in `assumptions`. `distance_provenance` is
+  `haversine_straight_line_derived` — never presented as road distance.
+- `/api/datasets/demo` reads the demo CSV from a single server-side constant
+  path; the response labels `source_name` with a `demo:` prefix so the UI can
+  show it as demo data.
 
 ### 5.3 Rules
 
