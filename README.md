@@ -13,7 +13,7 @@ for the PreZero / City of Heilbronn challenge. See `PLAN.md` for milestones and
 
 | Tool | Version used |
 |---|---|
-| Python | 3.14.8 (3.11–3.14 supported; ortools has no 3.15 wheels yet, see `pyproject.toml`) |
+| Python | 3.14.8 (3.12–3.14 supported; numpy requires ≥3.12 and ortools has no 3.15 wheels yet, see `pyproject.toml`) |
 | uv | 0.13.1 |
 | Node | v26.13.0 |
 | npm | 11.20.0 |
@@ -25,7 +25,7 @@ uv venv --python 3.14          # creates .venv (use --clear to recreate)
 uv pip install -e ".[dev]"     # installs runtime + dev dependencies
 ```
 
-Alternative without uv (Python 3.11–3.14):
+Alternative without uv (Python 3.12–3.14):
 
 ```bash
 python3.14 -m venv .venv
