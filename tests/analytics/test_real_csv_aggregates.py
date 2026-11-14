@@ -26,13 +26,12 @@ from src.analytics.series_features import (
 )
 from src.analytics.spatial import require_real_ids
 from src.data.loader import load_glass_fill_csv
-
-REAL_CSV = Path("data/raw/glass_fill_levels_anonymized_f.csv")
+from tests.helpers import REAL_CSV_PATH, require_real_csv_path
 
 
 @pytest.fixture(scope="module")
 def dataset():
-    result = load_glass_fill_csv(REAL_CSV)
+    result = load_glass_fill_csv(require_real_csv_path())
     assert not result.errors, f"real CSV must load cleanly, got: {result.errors[:3]}"
     return result.dataset
 
@@ -136,8 +135,8 @@ class TestGroupingPins:
 
 class TestFullReportRun:
     def test_real_report_builds_with_figures(self, dataset, tmp_path: Path) -> None:
-        text = build_report(REAL_CSV, tmp_path, require_real=True)
-        assert text.startswith(f"FILE: {REAL_CSV}")
+        text = build_report(REAL_CSV_PATH, tmp_path, require_real=True)
+        assert text.startswith(f"FILE: {REAL_CSV_PATH}")
         assert "ROWS: 11701 rows" in text
         assert len(list(tmp_path.glob("*.png"))) == 6
         # BW holidays in span are exactly the 11 external-calendar dates.

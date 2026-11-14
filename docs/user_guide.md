@@ -172,6 +172,14 @@ Comparison design (scenarios, gains, repetition protocol): contracts §4.7.
 
 - **One dataset in memory.** Uploads replace the active dataset; no
   persistence beyond the process.
+- **Private raw CSV.** The challenge CSV is private and git-ignored: the
+  **Load demo data** button, `POST /api/datasets/demo` and 17 real-data
+  tests (real-CSV pins + demo-endpoint tests) require it at
+  `data/raw/glass_fill_levels_anonymized_f.csv` (path is the server-side
+  constant in `src/api/services.py`). On a clean checkout without the file,
+  those tests skip with an explicit reason (`tests/helpers.py`) and the
+  demo endpoint responds 404 by design — place the CSV at that exact path
+  to enable both.
 - **Synthetic geography, fleet and physics.** No coordinates, depot,
   disposal sites, vehicle specs, container volumes, densities, service
   times or shift rules exist in the data [observed]; all are

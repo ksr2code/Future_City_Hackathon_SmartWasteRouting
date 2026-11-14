@@ -137,6 +137,8 @@ class TestComparison:
 
 class TestDemoDataset:
     def test_demo_upload_loads_fixed_server_csv(self, client: TestClient) -> None:
+        if not services.DEMO_CSV_PATH.is_file():
+            pytest.skip("server-side demo CSV not present (private data, gitignored) — skipped")
         response = client.post("/api/datasets/demo")
         assert response.status_code == 200, response.text
         body = response.json()
@@ -151,6 +153,8 @@ class TestDemoDataset:
         assert summary.json()["source_name"] == DEMO_SOURCE_NAME
 
     def test_demo_upload_replaces_active_dataset(self, client: TestClient) -> None:
+        if not services.DEMO_CSV_PATH.is_file():
+            pytest.skip("server-side demo CSV not present (private data, gitignored) — skipped")
         upload_csv(client, content=SMALL_CSV, name="small.csv")
         response = client.post("/api/datasets/demo")
         assert response.status_code == 200, response.text

@@ -10,8 +10,6 @@ The raw file is never printed; synthetic ids are rejected on this path.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from src.analytics.spatial import require_real_ids
@@ -19,13 +17,12 @@ from src.data.loader import load_glass_fill_csv
 from src.forecasting.evaluation import assign_split
 from src.forecasting.features import FeatureRow
 from src.forecasting.targets import EvaluationCase, build_evaluation_cases
-
-REAL_CSV = Path("data/raw/glass_fill_levels_anonymized_f.csv")
+from tests.helpers import require_real_csv_path
 
 
 @pytest.fixture(scope="module")
 def cases() -> list[EvaluationCase]:
-    result = load_glass_fill_csv(REAL_CSV)
+    result = load_glass_fill_csv(require_real_csv_path())
     assert not result.errors, f"real CSV must load cleanly: {result.errors[:3]}"
     require_real_ids(result.dataset.readings)
     return build_evaluation_cases(result.dataset)

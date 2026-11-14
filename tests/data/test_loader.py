@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from src.data.loader import load_glass_fill_csv
+from tests.helpers import require_real_csv_path
 
 # SYNTHETIC valid fixture, written WITH a UTF-8 BOM (mirrors the real file,
 # docs/data_profile.md §1). Covers: all three materials, numeric decile fill,
@@ -215,8 +216,9 @@ def test_real_csv_matches_observed_profile() -> None:
     1,192 "overfull" rows; span 2025-10-17 → 2026-09-30; per-material rows
     brown 3,100 / green 4,169 / white 4,432. The real file is clean under
     R1-R7 (§9-§11: no nulls, no duplicates, no out-of-range, all deciles).
+    Skips when the private CSV is absent (clean checkout / CI).
     """
-    result = load_glass_fill_csv(Path("data/raw/glass_fill_levels_anonymized_f.csv"))
+    result = load_glass_fill_csv(require_real_csv_path())
     assert result.errors == []
     assert result.warnings == []
     summary = result.dataset.summary
