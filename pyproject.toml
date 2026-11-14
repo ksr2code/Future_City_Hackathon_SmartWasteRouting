@@ -13,6 +13,7 @@ dependencies = [
     "ortools>=9.15.6755",
     "fastapi>=0.162.7",
     "uvicorn>=0.54.0",
+    "python-multipart>=0.0.20",
     "pydantic>=2.14.3",
     "matplotlib>=3.11.2",  # approved by user 2026-11-14 for M3 reproducible EDA plots
 ]
@@ -22,6 +23,7 @@ dev = [
     "pytest>=9.2.0",
     "ruff>=0.17.5",
     "mypy>=2.4.1",
+    "httpx>=0.28",  # FastAPI TestClient dependency (M10 contract tests)
 ]
 
 [build-system]

@@ -1,0 +1,136 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ApiError,
+  detailMessage,
+  fetchConfig,
+  fetchSummary,
+  runCandidates,
+  runRoute,
+  uploadDataset,
+} from "./api";
+import { jsonResponse } from "../test/dom";
+import { routeResponseFixture, selectionFixture, summaryFixture } from "../test/fixtures";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+type FetchArgs = [url: RequestInfo | URL, init?: RequestInit];
+
+function stubJsonFetch(reply: (...args: FetchArgs) => Response) {
+  const fetchMock = vi.fn(async (...args: FetchArgs): Promise<Response> => reply(...args));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+describe("api client (§5)", () => {
+  it("fetchSummary GETs /api/summary and parses the DatasetSummary shape", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(summaryFixture));
+
+    const summary = await fetchSummary();
+
+    expect(summary.n_rows).toBe(11701);
+    expect(summary.rows_per_material.brown).toBe(3901);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/summary");
+  });
+
+  it("maps non-OK responses to ApiError carrying the status", async () => {
+    stubJsonFetch(() => jsonResponse({ detail: "no dataset" }, 404));
+
+    const error = await fetchSummary().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+    expect((error as ApiError).message).toContain("404");
+  });
+
+  it("uploadDataset POSTs multipart /api/datasets with the file", async () => {
+    const fetchMock = stubJsonFetch(() =>
+      jsonResponse({ summary: summaryFixture, errors: [], warnings: [] }),
+    );
+
+    const file = new File(["location_id,material_type,date,fill_level"], "glass.csv", {
+      type: "text/csv",
+    });
+    await uploadDataset(file);
+
+    const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
+    expect(url).toBe("/api/datasets");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+  });
+
+  it("runCandidates POSTs JSON with policy_config override", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(selectionFixture));
+
+    const response = await runCandidates({
+      as_of_date: "2026-10-31",
+      horizon_days: 28,
+      method: "persistence",
+      policy_config: { select_threshold_pct: 90 },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
+    expect(url).toBe("/api/candidates");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      as_of_date: "2026-10-31",
+      horizon_days: 28,
+      method: "persistence",
+      policy_config: { select_threshold_pct: 90 },
+    });
+    expect(response.config.select_threshold_pct).toBe(80);
+    expect(response.selected).toHaveLength(2);
+  });
+
+  it("runRoute POSTs /api/route with snake_case routing overrides and parses §4.3 solution", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(routeResponseFixture));
+
+    const response = await runRoute({
+      as_of_date: "2026-10-31",
+      horizon_days: 28,
+      method: "persistence",
+      policy_config: {},
+      routing_config: {
+        vehicle_count_available: 2,
+        densities_kg_per_litre: { brown: 0.6 },
+      },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
+    expect(url).toBe("/api/route");
+    const body = JSON.parse(init?.body as string) as {
+      routing_config: Record<string, unknown>;
+    };
+    expect(body.routing_config).toEqual({
+      vehicle_count_available: 2,
+      densities_kg_per_litre: { brown: 0.6 },
+    });
+    expect(response.solution.status).toBe("feasible");
+    expect(response.solution.totals.stops_served).toBe(2);
+    expect(response.solution.unserved[0]?.reason).toContain("shift");
+    expect(response.assumptions.length).toBeGreaterThan(0);
+  });
+
+  it("fetchConfig GETs /api/config", async () => {
+    const fetchMock = stubJsonFetch(() =>
+      jsonResponse({
+        policy: { select_threshold_pct: 80, uncertainty_buffer_pct: 0, overfull_always_selected: true },
+        routing: { container_volume_litres: 1900 },
+        assumption_fields: ["container_volume_litres"],
+      }),
+    );
+
+    const config = await fetchConfig();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/config");
+    expect(config.routing.container_volume_litres).toBe(1900);
+  });
+
+  it("detailMessage flattens FastAPI 422 detail arrays and strings", () => {
+    expect(
+      detailMessage([{ loc: ["body", "policy_config"], msg: "Input should be less than 101", type: "value_error" }]),
+    ).toContain("Input should be less than 101");
+    expect(detailMessage("threshold out of range")).toBe("threshold out of range");
+    expect(detailMessage(undefined)).toBe("");
+  });
+});
