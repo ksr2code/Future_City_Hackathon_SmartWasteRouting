@@ -10,22 +10,41 @@ import {
   type RoutingConfigOverride,
 } from "./lib/api";
 import { fetchHealth, type Health } from "./lib/health";
+import { t, type Lang, type TranslationKey } from "./lib/i18n";
 import { CandidatesPanel } from "./components/CandidatesPanel";
 import { ConfigEditor } from "./components/ConfigEditor";
 import { ContainerList } from "./components/ContainerList";
 import { KpiOverview } from "./components/KpiOverview";
+import { LanguageToggle } from "./components/LanguageToggle";
+import { Overview } from "./components/Overview";
 import { RoutePanel } from "./components/RoutePanel";
 import { SyntheticDataBanner } from "./components/SyntheticDataBanner";
 import { UploadPanel } from "./components/UploadPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 /**
- * Operator dashboard (M11). Sections: upload → KPI overview → containers →
- * demo-config overrides → forecast/candidates → route proposal. Demo geography
- * /values are always visibly labelled; observed vs predicted vs [demo
- * assumption] is never mixed.
+ * Operator dashboard (M11 + jury-usability pass). Tab navigation with the
+ * plain-language Overview first; ALL panels stay mounted (hidden via the
+ * `hidden` attribute) so state is kept and cross-panel flows keep working.
+ * Demo geography/values are always visibly labelled; observed vs predicted vs
+ * [demo assumption] is never mixed.
  */
+type TabId = "overview" | "data" | "containers" | "forecast" | "route" | "config";
+
+const TABS: ReadonlyArray<{ id: TabId; labelKey: TranslationKey; testid: string }> = [
+  { id: "overview", labelKey: "nav.overview", testid: "nav-overview" },
+  { id: "data", labelKey: "nav.data", testid: "nav-data" },
+  { id: "containers", labelKey: "nav.containers", testid: "nav-containers" },
+  { id: "forecast", labelKey: "nav.forecast", testid: "nav-forecast" },
+  { id: "route", labelKey: "nav.route", testid: "nav-route" },
+  { id: "config", labelKey: "nav.config", testid: "nav-config" },
+];
+
 export default function App() {
+  // UI language (Overview is translated; technical panels stay English).
+  const [lang, setLang] = useState<Lang>("en");
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
+
   // Liveness (M0 convention, asserted by App.test.tsx).
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -113,7 +132,12 @@ export default function App() {
     setRouteAssumptions(Array.isArray(response.assumptions) ? response.assumptions : []);
   }
 
-  const demoInPlay = routeAssumptions !== null;
+  // Demo data in play: route assumptions returned, or a demo-prefixed dataset
+  // (POST /api/datasets/demo labels source_name with a `demo:` prefix, §5.2.2).
+  // Guarded: mocked/malformed summaries must not crash on missing source_name.
+  const demoDataset =
+    typeof summary?.source_name === "string" && summary.source_name.startsWith("demo:");
+  const demoInPlay = routeAssumptions !== null || demoDataset;
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl bg-slate-50 p-6 lg:p-8">
@@ -141,13 +165,86 @@ export default function App() {
         </div>
       ) : null}
 
+      {/* Tab navigation — Overview first for non-technical users */}
+      <nav
+        className="mb-4 flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm"
+        aria-label="Main views"
+        data-testid="main-nav"
+      >
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            aria-current={activeTab === tab.id ? "page" : undefined}
+            className={
+              activeTab === tab.id
+                ? "rounded bg-sky-700 px-3 py-1.5 text-sm font-semibold text-white"
+                : "rounded px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            }
+            data-testid={tab.testid}
+          >
+            {t(lang, tab.labelKey)}
+          </button>
+        ))}
+        <div className="ml-auto pr-1">
+          <LanguageToggle lang={lang} onChange={setLang} />
+        </div>
+      </nav>
+
+      {/* One boundary per main view: a render error degrades that view to a
+          visible retryable message — never a blank dashboard (M11).
+          Every panel stays mounted; inactive tabs are merely hidden. */}
       <div className="space-y-4">
-        {/* One boundary per main view: a render error degrades that view to a
-            visible retryable message — never a blank dashboard (M11). */}
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div hidden={activeTab !== "overview"}>
+          <ErrorBoundary label="Overview">
+            <Overview
+              lang={lang}
+              summary={summary}
+              summaryLoading={summaryLoading}
+              summaryError={summaryError}
+              datasetVersion={datasetVersion}
+              onDemoLoaded={handleUploaded}
+            />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "data"} className="grid gap-4 xl:grid-cols-2">
           <ErrorBoundary label="Upload">
             <UploadPanel onUploaded={handleUploaded} />
           </ErrorBoundary>
+          <ErrorBoundary label="Dataset overview">
+            <KpiOverview summary={summary} loading={summaryLoading} error={summaryError} />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "containers"}>
+          <ErrorBoundary label="Containers">
+            <ContainerList datasetVersion={datasetVersion} />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "forecast"}>
+          <ErrorBoundary label="Forecast & candidates">
+            <CandidatesPanel
+              defaultAsOf={summary?.date_max ?? null}
+              policyOverride={policyOverride}
+            />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "route"}>
+          <ErrorBoundary label="Route proposal">
+            <RoutePanel
+              defaultAsOf={summary?.date_max ?? null}
+              policyOverride={policyOverride}
+              routingOverride={routingOverride}
+              onRoute={handleRoute}
+            />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "config"}>
           <ErrorBoundary label="Demo config">
             <ConfigEditor
               config={config}
@@ -160,26 +257,6 @@ export default function App() {
             />
           </ErrorBoundary>
         </div>
-        <ErrorBoundary label="Dataset overview">
-          <KpiOverview summary={summary} loading={summaryLoading} error={summaryError} />
-        </ErrorBoundary>
-        <ErrorBoundary label="Containers">
-          <ContainerList datasetVersion={datasetVersion} />
-        </ErrorBoundary>
-        <ErrorBoundary label="Forecast & candidates">
-          <CandidatesPanel
-            defaultAsOf={summary?.date_max ?? null}
-            policyOverride={policyOverride}
-          />
-        </ErrorBoundary>
-        <ErrorBoundary label="Route proposal">
-          <RoutePanel
-            defaultAsOf={summary?.date_max ?? null}
-            policyOverride={policyOverride}
-            routingOverride={routingOverride}
-            onRoute={handleRoute}
-          />
-        </ErrorBoundary>
       </div>
 
       <footer className="mt-6 text-xs text-slate-400">

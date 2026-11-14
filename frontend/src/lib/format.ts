@@ -44,6 +44,30 @@ export function formatDate(iso: string | null | undefined): string {
   return iso === null || iso === undefined || iso === "" ? "—" : iso;
 }
 
+/**
+ * Derived savings share (naive − optimised) / naive, in percent. Purely
+ * derived from the two scenario distances — callers must always label it as
+ * derived, never present it as a measured fact. Returns null when not
+ * computable (missing/non-finite values or naive distance <= 0).
+ */
+export function derivedSavingsPct(
+  naive: number | null | undefined,
+  optimised: number | null | undefined,
+): number | null {
+  if (
+    naive === null ||
+    naive === undefined ||
+    optimised === null ||
+    optimised === undefined ||
+    !Number.isFinite(naive) ||
+    !Number.isFinite(optimised) ||
+    naive <= 0
+  ) {
+    return null;
+  }
+  return ((naive - optimised) / naive) * 100;
+}
+
 /** Unserved entry label (backend UnservedStopResponse: flat location+material). */
 export function formatStopKey(entry: { location_id: string; material_type: string }): string {
   return `${entry.location_id} · ${entry.material_type}`;

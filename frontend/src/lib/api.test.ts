@@ -2,14 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   detailMessage,
+  fetchComparison,
   fetchConfig,
   fetchSummary,
+  loadDemoDataset,
   runCandidates,
   runRoute,
   uploadDataset,
 } from "./api";
 import { jsonResponse } from "../test/dom";
-import { routeResponseFixture, selectionFixture, summaryFixture } from "../test/fixtures";
+import {
+  comparisonFixture,
+  routeResponseFixture,
+  selectionFixture,
+  summaryFixture,
+} from "../test/fixtures";
 import realUploadCapture from "../test/fixtures/real-capture/upload.json";
 
 afterEach(() => {
@@ -130,6 +137,42 @@ describe("api client (§5)", () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/config");
     expect(config.routing.container_volume_litres).toBe(1900);
+  });
+
+  it("fetchComparison GETs /api/comparison and parses the §5.2.2 payload", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(comparisonFixture));
+
+    const comparison = await fetchComparison();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/comparison");
+    expect(comparison.naive.method).toBe("naive_fixed_order");
+    expect(comparison.naive.distance_m).toBe(400475);
+    expect(comparison.optimised.method).toBe("ortools");
+    expect(comparison.optimised.distance_m).toBe(69889);
+    expect(comparison.optimised.selected_count).toBe(458);
+    expect(comparison.distance_provenance).toBe("haversine_straight_line_derived");
+  });
+
+  it("fetchComparison maps 404 (no dataset loaded, §5.3) to ApiError carrying 404", async () => {
+    stubJsonFetch(() => jsonResponse({ detail: "no dataset" }, 404));
+
+    const error = await fetchComparison().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+  });
+
+  it("loadDemoDataset POSTs /api/datasets/demo without a request body", async () => {
+    const fetchMock = stubJsonFetch(() => jsonResponse(realUploadCapture));
+
+    const response = await loadDemoDataset();
+
+    const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
+    expect(url).toBe("/api/datasets/demo");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+    expect(response.n_rows).toBe(11701);
+    expect(response.errors).toEqual([]);
   });
 
   it("detailMessage flattens FastAPI 422 detail arrays and strings", () => {

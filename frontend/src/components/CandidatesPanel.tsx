@@ -58,11 +58,19 @@ export function CandidatesPanel({
     Number.isFinite(params.horizon_days) &&
     params.horizon_days >= 1;
 
+  // Data-generated insight sentence (from the API selection, never hardcoded).
+  const insightTitle =
+    selection !== null
+      ? `${selection.selected.length} of ${selection.selected.length + selection.skipped.length} containers are expected to need emptying by ${selection.target_date ?? "—"} — ${selection.skipped.length} can wait`
+      : "4 · Forecast & candidate stops";
+
   return (
     <Panel
-      title="4 · Forecast & candidate stops"
+      title={insightTitle}
       subtitle={
         <>
+          What this shows: predicted fill per container and the policy decision with its reason.
+          Why it matters: only containers that likely need service enter the route plan.
           Predicted fill is a <strong>model output</strong> [predicted], not observed. Selected vs
           skipped per policy §3 with reasons.
         </>

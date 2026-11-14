@@ -48,16 +48,13 @@ export function ContainerList({ datasetVersion }: { datasetVersion: number }) {
 
   const overfullCount = containers?.filter((c) => c.last_is_overfull).length ?? 0;
   const visible = showAll ? (containers ?? []) : (containers ?? []).slice(0, VISIBLE_ROWS);
+  const overfullSharePct =
+    containers !== null && containers.length > 0 ? (overfullCount / containers.length) * 100 : null;
 
   return (
     <Panel
       title="3 · Containers (observed last readings)"
-      subtitle={
-        <>
-          Last reading per (location, material) series · fill levels in % · overfull shown as its
-          own state, not 100 %.
-        </>
-      }
+      subtitle="What this shows: the last sensor reading per (location, material) series. Why it matters: overfull containers should be collected first — fill is % of container volume; overfull is its own state, never 100 %."
       testid="containers-panel"
     >
       {loading ? <LoadingState label="Loading containers" /> : null}
@@ -70,7 +67,23 @@ export function ContainerList({ datasetVersion }: { datasetVersion: number }) {
       ) : null}
       {!loading && containers !== null && containers.length > 0 ? (
         <div>
-          <p className="mb-2 text-xs text-slate-500" data-testid="container-count">
+          {/* Data-generated insight sentence (numbers come from the API, never hardcoded). */}
+          <p className="text-sm font-semibold text-slate-800" data-testid="containers-insight">
+            {containers.length.toLocaleString("en-US")} container series — {overfullCount}{" "}
+            currently overfull
+            {overfullSharePct !== null ? ` (${overfullSharePct.toFixed(1)} % of series)` : ""}
+          </p>
+          {/* "Show all" stays the FIRST button in the panel (test + keyboard order). */}
+          {containers.length > VISIBLE_ROWS ? (
+            <button
+              type="button"
+              onClick={() => setShowAll((s) => !s)}
+              className="mt-2 text-xs font-medium text-sky-700 hover:underline"
+            >
+              {showAll ? "Show fewer" : `Show all ${containers.length} series`}
+            </button>
+          ) : null}
+          <p className="mt-2 text-xs text-slate-500" data-testid="container-count">
             {containers.length} series · {overfullCount} currently overfull
           </p>
           <div className="max-h-72 overflow-auto rounded border border-slate-200">
@@ -112,15 +125,6 @@ export function ContainerList({ datasetVersion }: { datasetVersion: number }) {
               </tbody>
             </table>
           </div>
-          {containers.length > VISIBLE_ROWS ? (
-            <button
-              type="button"
-              onClick={() => setShowAll((s) => !s)}
-              className="mt-2 text-xs font-medium text-sky-700 hover:underline"
-            >
-              {showAll ? "Show fewer" : `Show all ${containers.length} series`}
-            </button>
-          ) : null}
         </div>
       ) : null}
     </Panel>

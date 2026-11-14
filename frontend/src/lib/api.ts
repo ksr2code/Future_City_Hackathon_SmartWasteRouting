@@ -24,7 +24,19 @@ export type DistanceProvenance = "haversine_straight_line_derived" | "external";
 
 export type SolveStatus = "optimal" | "feasible" | "infeasible" | "timeout";
 
-/** §5.2 DatasetSummary */
+/**
+ * §5.2.2 FillStats — shares of **readings** (percent of n_rows). The data has
+ * no collection events; never word these as "emptyings". threshold_pct echoes
+ * the §3.1 default (80) used for the at/over-full share [demo assumption].
+ */
+export interface FillStats {
+  share_readings_full_or_above_pct: number;
+  share_readings_overfull_pct: number;
+  share_readings_empty_pct: number;
+  threshold_pct: number;
+}
+
+/** §5.2 DatasetSummary (+ §5.2.2 fill_stats; optional so the UI degrades to "—"). */
 export interface DatasetSummary {
   n_rows: number;
   n_locations: number;
@@ -35,6 +47,7 @@ export interface DatasetSummary {
   n_errors: number;
   n_warnings: number;
   source_name: string;
+  fill_stats?: FillStats | null;
 }
 
 /**
@@ -290,6 +303,43 @@ export interface RouteResponse {
   assumptions: string[];
 }
 
+/**
+ * §5.2.2 ComparisonScenario — one side (fixed-order naive or optimised) of the
+ * M12 demo comparison served by GET /api/comparison.
+ */
+export interface ComparisonScenario {
+  method: "naive_fixed_order" | "ortools";
+  status: string;
+  distance_m: number;
+  duration_min: number;
+  stops_served: number;
+  stops_total: number;
+  vehicles_available: number;
+  vehicles_used: number;
+  collected_volume_litres: number;
+  collected_weight_kg: number;
+  unserved_count: number;
+  recommended_trucks: number;
+  fleet_basis: { ceil_by_volume: number; ceil_by_weight: number };
+}
+
+/**
+ * §5.2.2 ComparisonResponse. v1 echoes fixed CLI defaults (as_of/target/
+ * horizon, method "persistence"). Optimised totals vary slightly run-to-run
+ * (GLS, §4.4) — noted in `assumptions`. `distance_provenance` is
+ * `haversine_straight_line_derived` — never present as road distance.
+ */
+export interface ComparisonResponse {
+  as_of_date: string;
+  target_date: string;
+  horizon_days: number;
+  method: string;
+  naive: ComparisonScenario;
+  optimised: ComparisonScenario & { selected_count: number; skipped_count: number };
+  distance_provenance: DistanceProvenance;
+  assumptions: string[];
+}
+
 /** API error with HTTP status and parsed detail (FastAPI 422 shape tolerated). */
 export class ApiError extends Error {
   readonly status: number;
@@ -390,4 +440,23 @@ export async function runRoute(payload: RouteRequest): Promise<RouteResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * GET /api/comparison (§5.2.2): naive fixed-order vs optimised summary on the
+ * active dataset. 404 when no dataset is loaded (§5.3) — callers must turn
+ * that into an empty state, not an error.
+ */
+export async function fetchComparison(): Promise<ComparisonResponse> {
+  return request<ComparisonResponse>("/api/comparison");
+}
+
+/**
+ * POST /api/datasets/demo (§5.1): load the server-side demo CSV (path fixed
+ * server-side, never client-supplied). Response shape = upload response
+ * (flat DatasetSummary + errors/warnings); `source_name` carries a `demo:`
+ * prefix so the UI can label it as demo data (§5.2.2).
+ */
+export async function loadDemoDataset(): Promise<UploadResponse> {
+  return request<UploadResponse>("/api/datasets/demo", { method: "POST" });
 }

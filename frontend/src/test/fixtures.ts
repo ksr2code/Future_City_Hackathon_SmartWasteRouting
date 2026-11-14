@@ -3,6 +3,7 @@
  * §5.2 shapes. Labelled synthetic; never mistaken for observed data.
  */
 import type {
+  ComparisonResponse,
   ConfigDefaults,
   DatasetSummary,
   RouteResponse,
@@ -20,6 +21,20 @@ export const summaryFixture: DatasetSummary = {
   n_errors: 0,
   n_warnings: 0,
   source_name: "glass_fill_levels_anonymized_f.csv",
+};
+
+/**
+ * §5.2.2 fill_stats variant — synthetic values (no collection events in the
+ * data; "full or above" means readings at/above the 80 % threshold).
+ */
+export const summaryWithFillStats: DatasetSummary = {
+  ...summaryFixture,
+  fill_stats: {
+    share_readings_full_or_above_pct: 10.2,
+    share_readings_overfull_pct: 10.2,
+    share_readings_empty_pct: 0.4,
+    threshold_pct: 80,
+  },
 };
 
 export const containersFixture: SeriesStatus[] = [
@@ -151,5 +166,57 @@ export const configFixture: ConfigDefaults = {
     "overfull_always_selected",
     "container_volume_litres",
     "vehicle_volume_capacity_litres",
+  ],
+};
+
+/**
+ * §5.2.2 ComparisonResponse — synthetic values mirroring the documented M12
+ * demo run (docs/demo_numbers.md; distances are straight-line derived, never
+ * road distance). Used to pin the Overview before/after rendering.
+ */
+function scenario(method: "naive_fixed_order" | "ortools", overrides: Partial<ComparisonResponse["naive"]>) {
+  return {
+    method,
+    status: "feasible",
+    distance_m: 400475,
+    duration_min: 10521,
+    stops_served: 52,
+    stops_total: 1338,
+    vehicles_available: 3,
+    vehicles_used: 3,
+    collected_volume_litres: 52820,
+    collected_weight_kg: 26410,
+    unserved_count: 1286,
+    recommended_trucks: 116,
+    fleet_basis: { ceil_by_volume: 116, ceil_by_weight: 38 },
+    ...overrides,
+  };
+}
+
+export const comparisonFixture: ComparisonResponse = {
+  as_of_date: "2026-09-30",
+  target_date: "2026-10-28",
+  horizon_days: 28,
+  method: "persistence",
+  naive: scenario("naive_fixed_order", {}),
+  optimised: {
+    ...scenario("ortools", {
+      distance_m: 69889,
+      duration_min: 601,
+      stops_served: 43,
+      stops_total: 458,
+      collected_volume_litres: 47880,
+      collected_weight_kg: 23940,
+      unserved_count: 415,
+      recommended_trucks: 63,
+      fleet_basis: { ceil_by_volume: 63, ceil_by_weight: 38 },
+    }),
+    selected_count: 458,
+    skipped_count: 880,
+  },
+  distance_provenance: "haversine_straight_line_derived",
+  assumptions: [
+    "Coordinates, depot and disposal sites are synthetic [demo assumption].",
+    "Distances are straight-line derived, not road distance [demo assumption].",
   ],
 };

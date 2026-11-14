@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  derivedSavingsPct,
   formatInt,
   formatKg,
   formatLitres,
@@ -39,6 +40,20 @@ describe("format helpers (explicit units)", () => {
   it("labels straight-line provenance as NOT road distance", () => {
     expect(provenanceLabel("haversine_straight_line_derived")).toContain("NOT road distance");
     expect(provenanceLabel("external")).toContain("external matrix");
+  });
+
+  it("derives savings pct from naive vs optimised distances (M12 comparison)", () => {
+    expect(derivedSavingsPct(400475, 69889)).toBeCloseTo(82.55, 2);
+  });
+
+  it("derivedSavingsPct is null when not computable (naive 0/negative/NaN/missing, optimised missing)", () => {
+    expect(derivedSavingsPct(0, 69889)).toBeNull();
+    expect(derivedSavingsPct(-400475, 69889)).toBeNull();
+    expect(derivedSavingsPct(Number.NaN, 69889)).toBeNull();
+    expect(derivedSavingsPct(null, 69889)).toBeNull();
+    expect(derivedSavingsPct(undefined, 69889)).toBeNull();
+    expect(derivedSavingsPct(400475, null)).toBeNull();
+    expect(derivedSavingsPct(400475, Number.NaN)).toBeNull();
   });
 
   it("humanises reason codes", () => {

@@ -20,6 +20,7 @@ import { StatusBadge } from "./Badges";
 import { ForecastParamsForm, type ForecastParams } from "./ForecastParamsForm";
 import { Panel } from "./Panel";
 import { RouteMap } from "./RouteMap";
+import { TechDetails } from "./TechDetails";
 import { EmptyState, ErrorState, LoadingState } from "./states";
 
 /**
@@ -78,14 +79,22 @@ export function RoutePanel({
   const solution = result?.solution ?? null;
   const degraded = solution !== null && (solution.status === "infeasible" || solution.status === "timeout");
 
+  // Data-generated insight sentence (from the API solution, never hardcoded).
+  const insightTitle =
+    solution !== null
+      ? `${solution.routes.length} route(s) serve ${solution.totals.stops_served} of ${solution.totals.stops_total} stops — ${solution.unserved.length} unserved are listed with reasons`
+      : "5 · Route proposal";
+
   return (
     <Panel
-      title="5 · Route proposal"
+      title={insightTitle}
       subtitle={
         <>
-          OR-Tools CVRP over <strong>synthetic demo geography</strong> — coordinates, depot,
-          disposal, fleet and travel matrix are [demo assumption]; distances are straight-line
-          derived, not road distance (§4.2/§5.3).
+          What this shows: the order stops are visited, totals with units, and why each unserved
+          stop was skipped. Why it matters: drivers get a feasible, explainable tour. Computed over{" "}
+          <strong>synthetic demo geography</strong> — coordinates, depot, disposal, fleet and
+          travel matrix are [demo assumption]; distances are straight-line derived, not road
+          distance (§4.2/§5.3).
         </>
       }
       testid="route-panel"
@@ -118,10 +127,6 @@ export function RoutePanel({
 
       {result !== null && !busy && solution !== null ? (
         <div className="mt-3 space-y-4" data-testid="route-result">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={solution.status} />
-            <span className="text-xs text-slate-500">{provenanceLabel(solution.distance_provenance)}</span>
-          </div>
           {degraded ? (
             <div
               className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-900"
@@ -131,6 +136,16 @@ export function RoutePanel({
               never hidden (contract §4.4).
             </div>
           ) : null}
+
+          {/* Solver status + provenance are technical: collapsible details
+              (still in the DOM for tests/tools, hidden from the main view). */}
+          <TechDetails label="Technical details" testid="route-tech-details">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={solution.status} />
+              <span>{provenanceLabel(solution.distance_provenance)}</span>
+            </div>
+            <p>Objective value: {solution.objective_value ?? "—"}</p>
+          </TechDetails>
 
           <TotalsBar response={result} />
 
