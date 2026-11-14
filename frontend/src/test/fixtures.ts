@@ -96,14 +96,16 @@ export const routeResponseFixture: RouteResponse = {
           },
           { id: "demo_disposal", name: "Demo Disposal", lat: 49.145, lon: 9.215, service_minutes: 30 },
         ],
-        load_progression: [{ volume_litres: 1200, weight_kg: 600 }],
+        load_progression: [[1200, 600]],
         distance_m: 18400,
         duration_minutes: 95,
       },
     ],
     unserved: [
       {
-        stop_key: { location_id: "11111111-2222-3333-4444-555555555555", material_type: "white" },
+        // Backend UnservedStopResponse is FLAT (real capture route.json).
+        location_id: "11111111-2222-3333-4444-555555555555",
+        material_type: "white",
         reason: "minimum round trip exceeds max_shift_minutes",
       },
     ],

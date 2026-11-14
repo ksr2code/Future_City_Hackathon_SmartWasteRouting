@@ -37,12 +37,16 @@ export interface DatasetSummary {
   source_name: string;
 }
 
-/** Validation issue (§1.3-style). Field set not pinned in §5.2 — render defensively. */
+/**
+ * Validation issue — pinned by the backend `ValidationErrorItem`
+ * (src/api/schemas.py): rule_id, row_number (1-based, 0 = header), message,
+ * optional value. Full lists ride on the POST /datasets response (§5.1).
+ */
 export interface ApiIssue {
-  rule?: string;
-  row_number?: number;
-  message?: string;
-  value?: unknown;
+  rule_id: string;
+  row_number: number;
+  message: string;
+  value?: string | null;
 }
 
 /**
@@ -57,12 +61,12 @@ export interface UploadResponse extends DatasetSummary {
   warnings: ApiIssue[];
 }
 
-/** §5.2 SeriesStatus */
+/** §5.2 SeriesStatus (backend SeriesStatusResponse — last_date non-nullable). */
 export interface SeriesStatus {
   location_id: string;
   material_type: MaterialType;
   n_readings: number;
-  last_date: string | null;
+  last_date: string;
   last_fill_pct: number | null;
   last_is_overfull: boolean;
 }
@@ -225,18 +229,24 @@ export function sequenceNodeKind(node: SequenceNode): "stop" | "depot" | "dispos
   return "depot";
 }
 
-/** §4.3 Route */
+/** §4.3 Route (backend RouteResponseItem: pairs are (volume_litres, weight_kg)). */
 export interface Route {
   vehicle_type_id: string;
   sequence: SequenceNode[];
-  load_progression: Array<{ volume_litres: number; weight_kg: number }>;
+  /** JSON form of list[tuple[int, int]]: [[volume_litres, weight_kg], …]. */
+  load_progression: Array<[number, number]>;
   distance_m: number;
   duration_minutes: number;
 }
 
-/** §4.3 unserved entry — stop_key representation not pinned; tolerate both. */
+/**
+ * §4.3 unserved entry — FLAT {location_id, material_type, reason} (backend
+ * UnservedStopResponse; verbatim capture test/fixtures/real-capture/route.json).
+ * Never silently dropped (§5.3) — always rendered with its reason.
+ */
 export interface UnservedStop {
-  stop_key: string | { location_id: string; material_type: MaterialType };
+  location_id: string;
+  material_type: MaterialType;
   reason: string;
 }
 

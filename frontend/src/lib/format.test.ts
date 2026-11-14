@@ -32,9 +32,8 @@ describe("format helpers (explicit units)", () => {
     expect(formatPct(null)).toBe("— %");
   });
 
-  it("normalises stop keys of both §4.3 representations", () => {
+  it("formats flat unserved entries (backend UnservedStopResponse shape)", () => {
     expect(formatStopKey({ location_id: "loc-3", material_type: "white" })).toBe("loc-3 · white");
-    expect(formatStopKey("loc-3|white")).toBe("loc-3|white");
   });
 
   it("labels straight-line provenance as NOT road distance", () => {

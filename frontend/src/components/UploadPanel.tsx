@@ -45,10 +45,11 @@ export function UploadPanel({ onUploaded }: { onUploaded: (summary: DatasetSumma
 
   function issueLine(issue: ApiIssue, index: number): string {
     const parts: string[] = [];
-    if (issue.rule !== undefined) parts.push(`rule ${issue.rule}`);
-    if (issue.row_number !== undefined) parts.push(`row ${issue.row_number}`);
-    if (issue.message !== undefined && issue.message !== "") parts.push(issue.message);
-    else if (issue.value !== undefined) parts.push(JSON.stringify(issue.value));
+    // Backend ValidationErrorItem: rule_id, row_number (1-based; 0 = header).
+    parts.push(`rule ${issue.rule_id}`);
+    parts.push(`row ${issue.row_number}`);
+    if (issue.message !== "") parts.push(issue.message);
+    else if (issue.value !== undefined && issue.value !== null) parts.push(issue.value);
     return parts.length > 0 ? parts.join(" — ") : JSON.stringify(issue) + ` (#${index})`;
   }
 

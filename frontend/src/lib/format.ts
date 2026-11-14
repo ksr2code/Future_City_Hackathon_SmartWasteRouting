@@ -44,10 +44,9 @@ export function formatDate(iso: string | null | undefined): string {
   return iso === null || iso === undefined || iso === "" ? "—" : iso;
 }
 
-/** Unserved `stop_key` may be a string or a key object (§4.3) — normalise. */
-export function formatStopKey(key: string | { location_id: string; material_type: string }): string {
-  if (typeof key === "string") return key;
-  return `${key.location_id} · ${key.material_type}`;
+/** Unserved entry label (backend UnservedStopResponse: flat location+material). */
+export function formatStopKey(entry: { location_id: string; material_type: string }): string {
+  return `${entry.location_id} · ${entry.material_type}`;
 }
 
 /** Human label for a reason_code (§3.4 enum). */

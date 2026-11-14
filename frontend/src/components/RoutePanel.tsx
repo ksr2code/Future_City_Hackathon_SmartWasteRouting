@@ -164,7 +164,7 @@ export function RoutePanel({
                 >
                   {solution.unserved.map((u, i) => (
                     <li key={i}>
-                      <span className="font-mono">{formatStopKey(u.stop_key)}</span> — {u.reason}
+                      <span className="font-mono">{formatStopKey(u)}</span> — {u.reason}
                     </li>
                   ))}
                 </ul>
@@ -241,7 +241,7 @@ function RouteCard({ index, route }: { index: number; route: Route }) {
         <p className="mt-1 text-slate-500">
           Load progression (L / kg after each stop):{" "}
           {route.load_progression
-            .map((p) => `${p.volume_litres.toLocaleString("en-US")} L / ${p.weight_kg.toLocaleString("en-US")} kg`)
+            .map(([volumeLitres, weightKg]) => `${volumeLitres.toLocaleString("en-US")} L / ${weightKg.toLocaleString("en-US")} kg`)
             .join(" → ")}
         </p>
       ) : null}
