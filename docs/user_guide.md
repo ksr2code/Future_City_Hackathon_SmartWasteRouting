@@ -190,7 +190,6 @@ Comparison design (scenarios, gains, repetition protocol): contracts §4.7.
 - **Small served share.** With demo fleet ×3 and 480-min shifts [demo
   assumption], most candidates remain unserved with reasons — honest
   feasibility surfacing, not a bug.
-- **Known open item:** `uv lock` fails — `requires-python = ">=3.11,<3.15"`
-  vs numpy 2.5.4 requiring ≥3.12 (reproduced 2026-11-14). Workaround:
-  install with `uv pip install -e ".[dev]"` as in §2; fixing `pyproject.toml`
-  is tracked for the architect.
+- **Python floor ≥3.12.** `requires-python = ">=3.12,<3.15"` because numpy
+  2.5.4 requires ≥3.12 (earlier conflict with the 3.11 floor fixed in commit
+  e6db442, 2026-11-14; `uv.lock` is committed so resolutions reproduce).
