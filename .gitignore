@@ -16,3 +16,6 @@ data/raw/
 *.tsbuildinfo
 .coverage
 htmlcov/
+
+# Partner prototype material (private, never committed)
+data/from_partner/

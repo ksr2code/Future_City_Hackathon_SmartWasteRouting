@@ -78,6 +78,10 @@ never silently dropped.
 
 ## Days-to-full v2 (`days_to_full.py`, contracts §5.2.3 — not a trained model)
 
+Consumed downstream by the §5.2.4/§5.2.5 scenario engine (per-series rates
+drive both strategies) and the per-container interval view; method details:
+`docs/routing_methodology.md` §8–§9, demo numbers: `docs/demo_numbers.md`.
+
 Per series: `rate_pct_per_day` = §1.5 median fill-at-emptying rate;
 `days_to_full = target_pct / rate` (target 90 % **[demo assumption — slide
 mockup]**; parameter 1..100), assuming the container **refills from 0 after

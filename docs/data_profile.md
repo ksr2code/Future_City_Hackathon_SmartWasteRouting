@@ -124,12 +124,24 @@ Reproducible snippet for §12.2 row count:
 
 ## 13. Open questions (questions, not guesses)
 
-1. **What does one reading represent** — a sensor spot-check, a driver reading
-   at collection, or a level observed on a visit? Evidence for discussion: 93.4%
-   *(derived, 4,175/4,468)* of same-day (location,date) pairs span ≥2 materials
-   (§14), suggesting visit-driven batch readings, yet 41.2% of full/overfull
-   readings are followed by another full/overfull (§12.5), so collection does
-   not reliably reset the value.
+1. **RESOLVED (v4, 2026-11-14) [representative-stated]**: one row = one
+   **emptying event**; `fill_level_perc` is the fill level observed at that
+   emptying. The challenge slides' "status is not recorded during emptying"
+   referred to the situation *before* this dataset — measurement at emptying
+   began with it (project-owner clarification 14 Nov 2026; written
+   confirmation pending). Consequences (contracts §1.5): record intervals are
+   emptying intervals; fill drops are not emptying evidence; fill increases
+   are not accumulation velocity; per-series rate = median
+   `fill_at_emptying / interval_days`. Residual caveat (UI-mandatory):
+   "fill at emptying shows how full the container was when the schedule
+   reached it — not how fast it would have filled"; rates assume no
+   unobserved emptyings between records.
+   Historical note (pre-v4 discussion of this item): 93.4% *(derived,
+   4,175/4,468)* of same-day (location,date) pairs span ≥2 materials (§16),
+   consistent with visit-driven batch records; 41.2% of full/overfull
+   records are followed by another full/overfull (§12.5) — under the
+   resolved semantics this means refilled within the interval (or an
+   unrecorded extra emptying), not evidence against emptying.
 2. **What exactly does `"overfull"` mean** — measured >100%, an overflow
    report, or a sensor-error flag? How should forecasting/routing treat it
    (censor to 100? treat as >100? separate category)?

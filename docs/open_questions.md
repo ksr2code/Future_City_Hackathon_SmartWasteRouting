@@ -22,13 +22,28 @@ about the fill data itself live in `docs/data_profile.md` §13.
 | # | question | current labelled default |
 |---|---|---|
 | Q1 | Truck capacity: volume (L), weight (kg), and how many vehicles exist? | `demo_truck` 12,000 L / 10,000 kg × 3 [demo assumption] |
-| Q2 | Waste density per material (kg/L), or measured weights? | 0.5 kg/L uniform [demo assumption] |
+| Q2 | Waste density per material (kg/L), or measured weights? | 0.40 kg/L uniform [literature — German AVV table AVV 20 01 02, entsorgen-versorgen.de, retrieved 2026-11-14; corroborates partner's 380 kg/m³ within 5 %] |
 | Q3 | Compartment layout on the truck (how many, size per material)? | equal thirds, 4,000 L per material, sum = vehicle volume [demo assumption] |
 | Q4 | Is the 10 min driving time flat or an average — and does it cover depot→first, last→depot and disposal legs too? | flat 10 min on **every** leg [representative value + our interpretation] |
 | Q5 | Is the 5 min emptying per container or per location (3 igloos = one stop each today)? | per container (= per stop) [representative value + our interpretation] |
 | Q6 | Real coordinates of the 449 locations, depot and disposal site(s)? | synthetic SHA-256 geography near Heilbronn; seed/spread knobs for sensitivity only [demo assumption] |
 | Q7 | Road-network matrix or measured travel times? | haversine straight-line × 1.4 — never presented as road distance [demo assumption] |
 | Q8 | Disposal/yard unload duration? | 30 min per disposal visit [demo assumption] |
+| Q9 | The challenge provider announced a **second key graph** beside "average filling time per material" but never specified it — which one? | none (awaiting answer) |
+| Q10 | What is the city's actual emptying schedule/frequency per site (the fixed-frequency baseline's k)? | k = 28 days uniform [demo assumption — observed median record gap] |
+| Q11 | Do sites carry multiple igloos of the **same** colour (invisible in the data — one series per location+colour [observed])? | 1 igloo per series; `containers_per_series` knob 1..n [demo assumption] |
+
+Answered/clarified additionally (14 Nov 2026):
+
+- **Record semantics** [representative-stated, resolved]: every row is one
+  emptying event; fill = level at that emptying (contracts §1.5,
+  `docs/data_profile.md` §13.1). Written confirmation pending.
+- **Truck cost basis** (owner-confirmed): headline = truck-days used ×
+  [representative] day rate; fleet budget secondary; "truck-day cost only".
+- **Site density context** [literature]: ZSVR advisory board (Aug 2024)
+  recommends ≥1 glass collection site per 1,000 inhabitants — Heilbronn's 449
+  locations comfortably exceed the implied ~130 minimum; no per-site container
+  count exists in German guidance (research 2026-11-14).
 
 ## Data-semantics questions (unchanged, see docs/data_profile.md §13)
 

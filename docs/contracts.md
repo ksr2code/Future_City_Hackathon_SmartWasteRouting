@@ -237,7 +237,7 @@ assumption]** until the host supplies real ones (docs/open_questions.md).
 | fill | percent (`float`) | from forecast (§2.2) |
 | coordinates | WGS84 lat/lon (`float`) | **none in data** — synthetic demo fixtures until host supplies |
 | speed | km/h (`float`) | [demo assumption] for `haversine_derived` travel times only (§4.2) |
-| density | kg/litre (`float`) | per material; default 0.5 uniform **[demo assumption — user-agreed 2026-11-14]**, request-overridable (§4.6) |
+| density | kg/litre (`float`) | per material; default 0.40 uniform **[literature] German AVV 20 01 02** (§4.6 v4), request-overridable |
 | cost | euros (`float`) | truck cost; parameters [representative] (§4.6), products [predicted] (derived, §4.3/§5.2.2) |
 
 ### 4.2 Input schemas (M8)

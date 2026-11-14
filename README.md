@@ -116,8 +116,9 @@ Start the backend and frontend as below, open http://localhost:5173 (the Vite
 dev server answers on `localhost`, not `127.0.0.1`), and press **Load demo
 data** on the Overview page — or upload
 `data/raw/glass_fill_levels_anonymized_f.csv`. A guided walkthrough is in
-`docs/demo_script.md`; the full guide (screens, architecture, limitations):
-`docs/user_guide.md`. No API keys are required.
+`docs/demo_script.md` (opens/closes in presentation mode); the full guide
+(screens incl. the Scenarios tab with planning-lever sliders, architecture,
+limitations): `docs/user_guide.md`. No API keys are required.
 
 ## Configuration
 
@@ -127,11 +128,12 @@ keys are required for the core demo.
 ## Documentation
 
 - `docs/user_guide.md` — user guide (deliverable 4): setup/run/test/demo, screens, architecture, limitations
-- `docs/routing_methodology.md` — distance provenance, solver setup, fleet sizing, comparison design
+- `docs/routing_methodology.md` — distance provenance, solver setup, fleet sizing, comparison + scenario engine, days-to-full
 - `docs/data_profile.md` — data dictionary / source audit
 - `docs/contracts.md` — cross-module contracts (wire format authority)
-- `docs/demo_numbers.md` — reproducible comparison numbers
+- `docs/demo_numbers.md` — reproducible comparison + scenario-engine numbers
 - `docs/model_card.md` — forecast model card
+- `docs/open_questions.md` — host inputs still awaited, with current labelled defaults (Q1–Q11)
 
 ## Data
 
