@@ -113,20 +113,196 @@ At inference/demo time the horizon is a configurable number of days
 - Leakage: no target reading may enter any feature; prediction-time features
   use only data available at `as_of_date`.
 
-## 3. Collection candidates (src/collection) — TBD at M7
+## 3. Collection candidates (src/collection) — v1, agreed for M7
 
-Shape (draft): stop list from forecast + configurable thresholds/buffers, each with
-a reason string. Thresholds configurable, not constants.
+Input is a forecast batch plus the series universe; output explains both
+selected and skipped containers. Nothing is silently dropped.
 
-## 4. Route input/output (src/routing) — TBD at M8/M9
+The challenge brief (§3 "Define General Variables", audited 2026-11-14) names
+only variable *categories*, no values — every default below is therefore
+**[demo assumption]**, configurable, never a magic constant.
 
-Shape (draft): depot, vehicles (volume+weight capacity), stops with coordinates
-[sourced externally — none in data, demo assumption until host supplies], travel
-matrix with explicit provenance (straight-line ≠ road distance). Output: route
-order, totals, load progression, unserved stops + reasons, fleet-size
-recommendation, solver status. OR-Tools only.
+### 3.1 `PolicyConfig` (frozen dataclass, stdlib only)
+
+| field | type | default | status |
+|---|---|---|---|
+| `select_threshold_pct` | `int` in `[0,100]` | 80 (aligned with §2.4 default) | [demo assumption] |
+| `uncertainty_buffer_pct` | `int` in `[0,100]` | 0 (off) | [demo assumption] |
+| `overfull_always_selected` | `bool` | `True` | [demo assumption] |
+
+Out-of-range or non-integer values ⇒ config error before any selection.
+
+### 3.2 Selection rule
+
+Selected iff (`predicted_state == "overfull"` **and** `overfull_always_selected`)
+or `predicted_fill_pct + uncertainty_buffer_pct >= select_threshold_pct`.
+
+### 3.3 `select_candidates` signature
+
+```text
+select_candidates(
+  universe:   Iterable[SeriesKey],            # all series (location_id, material_type)
+  forecasts:  Mapping[SeriesKey, ForecastRecord],  # §2.2; batch of one as_of/target
+  config:     PolicyConfig,
+) -> SelectionResult
+```
+
+```text
+SelectionResult = {
+  as_of_date, target_date: date | None,   # from the batch; None iff empty universe
+  config: PolicyConfig,                   # effective config echoed
+  selected: list[Candidate],              # order: predicted_fill_pct desc, ties by key
+  skipped:  list[Skip],                   # order: (location_id, material_type)
+}
+Candidate = { location_id, material_type, predicted_fill_pct, predicted_state,
+              reason_code, detail }
+Skip      = { location_id, material_type,
+              predicted_fill_pct | None, predicted_state | None,
+              reason_code, detail }
+```
+
+### 3.4 Invariants
+
+- Every universe series appears exactly once in `selected ∪ skipped`.
+- Series without a forecast (e.g. persistence `None`, §2.3) ⇒ `Skip` with
+  `predicted_* = None`, `reason_code = "no_forecast"`.
+- Forecast key not in universe, or batch with mixed `as_of_date`/`target_date`
+  ⇒ error; no partial output.
+- `reason_code` is a stable enum: `at_or_above_threshold`, `overfull_state`,
+  `below_threshold`, `no_forecast`. `detail` is deterministic and contains the
+  deciding numbers, e.g. `"predicted 92.0 >= threshold 80 + buffer 0"`.
+- No volume/weight/capacity fields — absent from data (§13.8); introduced at
+  M8 with labelled assumptions.
+- Deterministic: same inputs + config ⇒ identical output.
+
+Clarifications agreed at M7 review (2026-11-14):
+- When both rules select, `reason_code = "overfull_state"` (the override is
+  the deciding cause); with the override off, an overfull series is judged on
+  its numeric fallback only — the token is never coerced.
+- `as_of_date`/`target_date` are `None` **iff the forecast batch is empty**
+  (dates come from the batch); a non-empty universe with an empty batch yields
+  all-`no_forecast` skips with `None` dates.
+- Duplicate keys in `universe` ⇒ error (defends the exactly-once invariant).
+
+## 4. Route input/output (src/routing) — v1, agreed for M8/M9
+
+OR-Tools only (AGENTS rule 8). The brief (§3, audited 2026-11-14) names the
+variable categories but supplies **no values**: every numeric default below
+lives in a separate config module, labelled per value, and is **[demo
+assumption]** until the host supplies real ones.
+
+### 4.1 Units (explicit, everywhere)
+
+| quantity | unit | notes |
+|---|---|---|
+| volume | litres (`int`) | container and vehicle capacity |
+| weight | kilograms (`int`) | via density × collected volume |
+| distance | metres (`int`) | matrix and totals |
+| time | minutes (`int`) | service, travel, shift |
+| fill | percent (`float`) | from forecast (§2.2) |
+| coordinates | WGS84 lat/lon (`float`) | **none in data** — synthetic demo fixtures until host supplies |
+| speed | km/h (`float`) | [demo assumption] for derived travel times |
+| density | kg/litre (`float`) | per material; default 0.5 uniform **[demo assumption — user-agreed 2026-11-14]**, request-overridable (§4.6) |
+
+### 4.2 Input schemas (M8)
+
+```text
+Stop = { location_id, material_type,           # key into §3 candidates
+         lat, lon,                              # [demo assumption] synthetic until host data
+         container_volume_litres: int,          # [demo assumption]
+         predicted_fill_pct: float,             # from forecast §2.2
+         service_minutes: int }                 # [demo assumption]
+Depot         = { id, name, lat, lon }          # central yard
+DisposalSite  = { id, name, lat, lon, service_minutes }   # unloading; ≥1
+VehicleType   = { id, name, volume_capacity_litres, weight_capacity_kg,
+                  count_available }
+RoutingConfig = { max_shift_minutes,            # [demo assumption] brief §3
+                  densities_kg_per_litre: {material: float},   # defaults §4.6, request-overridable
+                  detour_factor, avg_speed_kmh, # [demo assumption] matrix derivation
+                  solver_time_limit_s }
+TravelMatrix  = { point_ids: [depot+disposal+stop ids],
+                  distance_m: n×n int,
+                  duration_min: n×n int,        # distance/speed unless supplied
+                  provenance: "haversine_straight_line_derived" | "external" }
+RoutingProblem = { depot, disposal_sites, stops, vehicle_types, travel, config }
+```
+
+Straight-line-derived matrices must keep that provenance string into all
+outputs and UI labels — never presented as road distance (AGENTS rule 9).
+
+### 4.3 Output schema (M9)
+
+```text
+RoutingSolution = {
+  status: "optimal" | "feasible" | "infeasible" | "timeout",   # mapped OR-Tools
+  objective_value: int | None,
+  routes: list[Route],
+  unserved: list[{stop_key, reason}],           # never silently dropped
+  totals: { distance_m, duration_min, collected_volume_litres,
+            collected_weight_kg, stops_served, stops_total },
+  fleet_recommendation: { vehicle_type_id, count,
+                          basis: {ceil_by_volume, ceil_by_weight} },  # brief §4
+  distance_provenance,                          # echoed from TravelMatrix
+}
+Route = { vehicle_type_id, sequence: list[Stop|DisposalSite|Depot>,
+          load_progression: [volume_litres, weight_kg after each stop],
+          distance_m, duration_minutes }
+```
+
+### 4.4 Invariants
+
+- Every input stop appears in exactly one route **or** in `unserved` with a
+  reason; counts reconcile (`stops_served + len(unserved) == stops_total`).
+- Volume and weight capacities hold at every load-progression point.
+- Route duration ≤ `max_shift_minutes` or the violation is reported, not hidden.
+- Fleet recommendation = max(⌈volume/capacity⌉, ⌈weight/capacity⌉) per vehicle
+  type [protocol choice v1; document in model card].
+- Deterministic given inputs, config and solver time limit/seed.
+
+Protocol choices agreed at M9 review (2026-11-14):
+- **No OR-Tools time dimension** (empirically: a span cap on any optional node
+  that cannot fit makes the model FAIL at root propagation). Shift compliance
+  is enforced post-hoc: stops whose minimum round trip exceeds the shift are
+  pre-filtered into `unserved`; over-long routes are truncated deterministically
+  (last disposal visit first if capacities hold, then lowest-fill stops).
+- Determinism is claimed (and tested) as **same status + same invariants**,
+  not bitwise route sequences — GLS under a wall-clock time limit may vary.
+- `objective_value` is the recomputed total route distance in metres; the
+  solver's internal objective (mixed with drop penalties) is not reported.
+- A vehicle may end at the depot with load aboard (yard absorbs it)
+  **[demo assumption]**; fleet recommendation covers full demand including
+  unserved stops.
+
+### 4.5 Inputs still missing (ask host on site)
+
+Real coordinates (449 locations), depot + disposal sites, fleet specs,
+container volumes, densities, service times, shift rules, road matrix or
+speeds. Until then the demo runs fully labelled synthetic values.
+
+### 4.6 Agreed demo defaults (user decision 2026-11-14) — all [demo assumption]
+
+Live in one labelled config module (`src/routing/demo_config.py`, M8); every
+value overridable **per request** (M10 API validates ranges per §3.1/§4.2 and
+echoes the effective config; M11 renders an editable panel that keeps the
+[demo assumption] labels visible — overrides never relabel facts).
+
+| value | default | note |
+|---|---|---|
+| `container_volume_litres` | 1900 | typical glass igloo size |
+| `densities_kg_per_litre` | 0.5 uniform (brown/green/white) | conservative loose-cullet demo value |
+| vehicle type | `demo_truck`: 12,000 L / 10,000 kg, 3 available | one type in v1 |
+| `service_minutes` (stop) | 10 | |
+| disposal `service_minutes` | 30 | |
+| `max_shift_minutes` | 480 | 8 h demo cap |
+| `avg_speed_kmh` | 30 | urban demo speed |
+| `detour_factor` | 1.4 | haversine→approx road factor; provenance stays "straight-line derived" |
+| `solver_time_limit_s` | 5.0 | keeps demo solver runs bounded; not part of the user agreement |
+
+Host-supplied values replace defaults in config only — never silent.
 
 ## 5. API (src/api) — TBD at M10
 
 Only `/health` exists (M0). Endpoints will wrap services defined by contracts 1–4;
-no business logic in handlers.
+no business logic in handlers. Config defaults (§3.1, §4.6) are overridable per
+request; endpoints validate overrides, echo the effective config, and keep
+[demo assumption] labels visible (same for the M11 frontend panel).
