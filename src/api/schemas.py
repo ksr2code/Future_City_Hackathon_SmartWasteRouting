@@ -41,6 +41,18 @@ class ValidationErrorItem(BaseModel):
     value: str | None = None
 
 
+class FillStatsResponse(BaseModel):
+    """§5.2.2 FillStats — fill-level shares over ``n_rows``. These are shares
+    of *readings*, never emptying events (the data records no collection
+    events). Overfull rows count only in ``share_readings_overfull_pct``
+    (§1.1: the token is never coerced into the numeric shares)."""
+
+    share_readings_full_or_above_pct: float  # numeric fill >= threshold_pct, 1 d.p.
+    share_readings_overfull_pct: float  # overfull rows / n_rows, 1 d.p.
+    share_readings_empty_pct: float  # numeric fill == 0, 1 d.p.
+    threshold_pct: int  # echoed; 80 = §3.1 PolicyConfig default [demo assumption]
+
+
 class DatasetSummaryResponse(BaseModel):
     """§5.2 DatasetSummary of the active dataset (n_errors is always 0 for an
     active dataset: uploads with errors are rejected and never stored)."""
@@ -54,6 +66,7 @@ class DatasetSummaryResponse(BaseModel):
     n_errors: int
     n_warnings: int
     source_name: str
+    fill_stats: FillStatsResponse
 
 
 class DatasetUploadResponse(DatasetSummaryResponse):
@@ -313,4 +326,47 @@ class RoutingSolutionResponse(BaseModel):
 class RouteResponse(BaseModel):
     selection: SelectionResponse
     solution: RoutingSolutionResponse
+    assumptions: list[str]
+
+
+# --- Comparison (§5.1 GET /api/comparison; §5.2.2 shapes) --------------------
+
+
+class ComparisonScenarioResponse(BaseModel):
+    """§5.2.2 one comparison scenario (naive fixed-order or optimised)."""
+
+    method: Literal["naive_fixed_order", "ortools"]
+    status: str  # naive: complete|incomplete; optimised: §4.3 solver status
+    distance_m: int
+    duration_min: int
+    stops_served: int
+    stops_total: int
+    vehicles_available: int
+    vehicles_used: int
+    collected_volume_litres: int
+    collected_weight_kg: int
+    unserved_count: int
+    recommended_trucks: int
+    fleet_basis: FleetBasisResponse
+
+
+class OptimisedScenarioResponse(ComparisonScenarioResponse):
+    """§5.2.2 optimised scenario plus the §3 selection sizes it routed."""
+
+    selected_count: int
+    skipped_count: int
+
+
+class ComparisonResponse(BaseModel):
+    """§5.2.2 naive-vs-optimised comparison; v1 uses the fixed CLI defaults
+    (as_of 2026-09-30, horizon 28) and echoes them. Optimised totals vary
+    slightly run-to-run (GLS wall-clock limit, §4.4) — noted in assumptions."""
+
+    as_of_date: date
+    target_date: date
+    horizon_days: int
+    method: Literal["persistence"]
+    naive: ComparisonScenarioResponse
+    optimised: OptimisedScenarioResponse
+    distance_provenance: str  # never presented as road distance (§4.2)
     assumptions: list[str]

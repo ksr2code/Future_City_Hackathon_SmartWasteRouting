@@ -93,6 +93,72 @@ class TestUpload:
         assert summary.json()["source_name"] == "big.csv"
 
 
+# Fill-stats fixture (hand-computed, §5.2.2): 5 readings — numeric 0, 80, 100,
+# 30 plus one literal "overfull" row. Threshold 80 (§3.1 default): 2 numeric
+# rows >= 80 -> 40.0; overfull 1/5 -> 20.0; empty (numeric 0) 1/5 -> 20.0.
+# The overfull row must NOT enter the numeric shares (coercion would make
+# full_or_above 60.0).
+FILL_STATS_CSV = """Location_id,material_type,date,fill_level_perc
+loc-a,brown,2026-01-05,0
+loc-a,brown,2026-01-19,80
+loc-a,green,2026-02-01,overfull
+loc-a,white,2026-01-06,100
+loc-b,brown,2026-01-07,30
+"""
+
+EXPECTED_FILL_STATS = {
+    "share_readings_full_or_above_pct": 40.0,
+    "share_readings_overfull_pct": 20.0,
+    "share_readings_empty_pct": 20.0,
+    "threshold_pct": 80,
+}
+
+
+class TestFillStats:
+    def test_upload_response_contains_fill_stats(self, client: TestClient) -> None:
+        response = client.post(
+            "/api/datasets",
+            files={"file": ("stats.csv", FILL_STATS_CSV.encode("utf-8"), "text/csv")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["fill_stats"] == EXPECTED_FILL_STATS
+
+    def test_summary_fill_stats_match_upload(self, client: TestClient) -> None:
+        upload_csv(client, content=FILL_STATS_CSV, name="stats.csv")
+        assert client.get("/api/summary").json()["fill_stats"] == EXPECTED_FILL_STATS
+
+    def test_fill_stats_round_to_one_decimal(self, client: TestClient) -> None:
+        csv = (
+            "Location_id,material_type,date,fill_level_perc\n"
+            "loc-a,brown,2026-01-05,10\n"
+            "loc-a,brown,2026-01-19,100\n"  # 1/3 readings >= 80 -> 33.3
+            "loc-a,green,2026-02-01,20\n"
+        )
+        upload_csv(client, content=csv, name="thirds.csv")
+        body = client.get("/api/summary").json()["fill_stats"]
+        assert body == {
+            "share_readings_full_or_above_pct": 33.3,
+            "share_readings_overfull_pct": 0.0,
+            "share_readings_empty_pct": 0.0,
+            "threshold_pct": 80,
+        }
+
+    def test_fill_stats_zero_row_dataset_is_all_zero(self, client: TestClient) -> None:
+        upload_csv(
+            client,
+            content="Location_id,material_type,date,fill_level_perc\n",
+            name="header-only.csv",
+        )
+        body = client.get("/api/summary").json()
+        assert body["n_rows"] == 0
+        assert body["fill_stats"] == {
+            "share_readings_full_or_above_pct": 0.0,
+            "share_readings_overfull_pct": 0.0,
+            "share_readings_empty_pct": 0.0,
+            "threshold_pct": 80,
+        }
+
+
 class TestSummaryAndContainers:
     def test_summary_404_without_dataset(self, client: TestClient) -> None:
         response = client.get("/api/summary")

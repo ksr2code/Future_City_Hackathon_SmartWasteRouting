@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from src.api.endpoints import router
-from src.api.errors import ApiError
+from src.api.errors import ApiError, DemoDatasetMissingError
 from src.api.state import NoDatasetError
 from src.collection.policy import PolicyConfigError
 from src.routing.schemas import RoutingSchemaError
@@ -40,6 +40,14 @@ async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
 @app.exception_handler(NoDatasetError)
 async def no_dataset_handler(_request: Request, exc: NoDatasetError) -> JSONResponse:
     """No active dataset -> 404 (contract §5.3)."""
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(DemoDatasetMissingError)
+async def demo_dataset_missing_handler(
+    _request: Request, exc: DemoDatasetMissingError
+) -> JSONResponse:
+    """Server-side demo CSV constant path absent -> 404 (contract §5.1)."""
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 

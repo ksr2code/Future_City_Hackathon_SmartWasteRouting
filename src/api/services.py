@@ -16,11 +16,13 @@ assumption]" in responses — never presented as an observed fact.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
 from src.api import schemas
+from src.api.errors import DemoDatasetMissingError
 from src.api.state import store
 from src.collection.policy import (
     Candidate,
@@ -30,9 +32,20 @@ from src.collection.policy import (
     select_candidates,
 )
 from src.data.loader import load_glass_fill_csv
-from src.data.schema import Dataset, LoadResult, ValidationError, ValidationWarning
-from src.forecasting.baseline import BaselineMethod, ForecastRecord, forecast
-from src.forecasting.features import build_feature_row, group_by_series
+from src.data.schema import (
+    Dataset,
+    LoadResult,
+    ReadingRecord,
+    ValidationError,
+    ValidationWarning,
+)
+from src.forecasting.baseline import (
+    METHOD_PERSISTENCE,
+    BaselineMethod,
+    ForecastRecord,
+    forecast,
+)
+from src.forecasting.features import SeriesKey, build_feature_row, group_by_series
 from src.forecasting.targets import EvaluationCase
 from src.routing.demo_config import (
     DEMO_CONTAINER_VOLUME_LITRES,
@@ -40,6 +53,7 @@ from src.routing.demo_config import (
     DEMO_DISPOSAL_ID,
     DEMO_DISPOSAL_SERVICE_MINUTES,
     DEMO_STOP_SERVICE_MINUTES,
+    DEMO_VEHICLE_COUNT_AVAILABLE,
     demo_depot,
     demo_disposal_site,
     demo_routing_config,
@@ -50,10 +64,12 @@ from src.routing.geography import (
     build_travel_matrix,
     synthetic_stop_coordinates,
 )
+from src.routing.naive import NaiveSolution, naive_fixed_order_simulation
 from src.routing.schemas import (
     Depot,
     DisposalSite,
     RoutingConfig,
+    RoutingProblem,
     Stop,
     VehicleType,
     stop_point_id,
@@ -61,6 +77,25 @@ from src.routing.schemas import (
 from src.routing.solver import Route, RoutingSolution, solve
 
 ASSUMPTION_LABEL = "[demo assumption]"
+
+# --- Shared demo constants (§5.1/§5.2.2; single source for the M12 CLI and
+# --- the API endpoints; compare_demo.py re-exports them) ---------------------
+
+DEMO_CSV_PATH = Path("data/raw/glass_fill_levels_anonymized_f.csv")
+"""POST /api/datasets/demo reads this one server-side constant path (§5.1) —
+never a client-supplied value."""
+
+COMPARISON_AS_OF_DEFAULT = date(2026, 9, 30)
+"""Fixed v1 comparison default, echoed in ComparisonResponse (§5.2.2)."""
+
+COMPARISON_HORIZON_DAYS_DEFAULT = 28  # days [demo assumption — observed median gap]
+
+GLS_NOTE = (
+    "Optimised totals vary slightly run-to-run: GUIDED LOCAL SEARCH runs under the "
+    "configured wall-clock solver time limit (contract §4.4 claims determinism as "
+    "same status + same invariants, not bitwise). The naive simulation is fully "
+    "deterministic."
+)
 
 
 # --- Datasets (§5.1 POST /api/datasets, GET /api/summary, /api/containers) ---
@@ -85,6 +120,40 @@ def upload_dataset(content: bytes, source_name: str) -> LoadResult:
     return result
 
 
+def fill_stats(readings: Sequence[ReadingRecord]) -> schemas.FillStatsResponse:
+    """§5.2.2 fill-level shares over ``n_rows`` (shares of readings, not
+    emptying events). Overfull rows count only in the overfull share (§1.1:
+    ``fill_level_pct`` is None exactly for overfull rows, never coerced).
+    The threshold echoes the §3.1 ``PolicyConfig`` default."""
+    threshold = PolicyConfig().select_threshold_pct
+    n_rows = len(readings)
+    if n_rows == 0:
+        return schemas.FillStatsResponse(
+            share_readings_full_or_above_pct=0.0,
+            share_readings_overfull_pct=0.0,
+            share_readings_empty_pct=0.0,
+            threshold_pct=threshold,
+        )
+    numeric_fills = [
+        reading.fill_level_pct for reading in readings if reading.fill_level_pct is not None
+    ]
+    return schemas.FillStatsResponse(
+        share_readings_full_or_above_pct=_share(
+            sum(1 for fill in numeric_fills if fill >= threshold), n_rows
+        ),
+        share_readings_overfull_pct=_share(
+            sum(1 for reading in readings if reading.is_overfull), n_rows
+        ),
+        share_readings_empty_pct=_share(sum(1 for fill in numeric_fills if fill == 0), n_rows),
+        threshold_pct=threshold,
+    )
+
+
+def _share(count: int, total: int) -> float:
+    """Percentage of ``total`` with 1 decimal place (§5.2.2)."""
+    return round(count / total * 100, 1)
+
+
 def dataset_summary() -> schemas.DatasetSummaryResponse:
     """§5.2 DatasetSummary of the active dataset (n_errors always 0)."""
     summary = store.dataset.summary
@@ -98,6 +167,7 @@ def dataset_summary() -> schemas.DatasetSummaryResponse:
         n_errors=0,
         n_warnings=len(store.warnings),
         source_name=store.source_name,
+        fill_stats=fill_stats(store.dataset.readings),
     )
 
 
@@ -105,15 +175,7 @@ def upload_response(result: LoadResult) -> schemas.DatasetUploadResponse:
     """Map a successful LoadResult to the §5.1 upload response shape."""
     summary = dataset_summary()
     return schemas.DatasetUploadResponse(
-        n_rows=summary.n_rows,
-        n_locations=summary.n_locations,
-        n_series=summary.n_series,
-        date_min=summary.date_min,
-        date_max=summary.date_max,
-        rows_per_material=summary.rows_per_material,
-        n_errors=0,
-        n_warnings=summary.n_warnings,
-        source_name=summary.source_name,
+        **summary.model_dump(),
         errors=[validation_error_item(error) for error in result.errors],
         warnings=[validation_warning_item(warning) for warning in result.warnings],
     )
@@ -136,6 +198,22 @@ def validation_warning_item(warning: ValidationWarning) -> schemas.ValidationErr
         message=warning.message,
         value=warning.value,
     )
+
+
+def load_demo_dataset() -> LoadResult:
+    """POST /api/datasets/demo: validate the server-side demo CSV (§1 rules).
+
+    The path is the single server-side constant ``DEMO_CSV_PATH`` (§5.1,
+    never client-supplied); a missing file raises
+    :class:`DemoDatasetMissingError` (mapped to 404 in ``main``). Validation
+    behaves exactly like an upload: errors keep the active dataset unchanged
+    (§5.3), success replaces it with a ``demo:``-prefixed ``source_name``.
+    """
+    if not DEMO_CSV_PATH.is_file():
+        raise DemoDatasetMissingError(
+            f"demo dataset not available on the server: {DEMO_CSV_PATH} does not exist"
+        )
+    return upload_dataset(DEMO_CSV_PATH.read_bytes(), f"demo:{DEMO_CSV_PATH.name}")
 
 
 def containers() -> list[schemas.SeriesStatusResponse]:
@@ -640,4 +718,182 @@ def _assumption_labels(
         f"{ASSUMPTION_LABEL} avg_speed_kmh={config.avg_speed_kmh}, "
         f"detour_factor={config.detour_factor} (matrix derivation)",
         f"{ASSUMPTION_LABEL} solver_time_limit_s={config.solver_time_limit_s}",
+    ]
+
+
+# --- Comparison (§5.1 GET /api/comparison; §5.2.2; shared with the M12 CLI) --
+
+
+@dataclass(frozen=True)
+class ComparisonScenarios:
+    """Both §5.2.2 scenario outputs on one dataset (the rendered markdown and
+    the ComparisonResponse are built from the very same objects)."""
+
+    naive: NaiveSolution
+    optimised: schemas.RouteResponse
+
+
+def run_comparison_scenarios(
+    dataset: Dataset,
+    as_of: date,
+    horizon_days: int,
+) -> ComparisonScenarios:
+    """Shared comparison core (M12 CLI ``compare_demo`` and GET
+    /api/comparison): the optimised scenario runs the unchanged ``run_route``
+    pipeline on the active store dataset, the naive scenario simulates all
+    series in fixed lexicographic order over the same §4.6 demo inputs.
+
+    ``dataset`` must be the active store dataset (the CLI uploads it first;
+    the endpoint has it loaded) because ``run_route`` reads the store.
+    """
+    optimised = run_route(
+        schemas.RouteRequest(
+            as_of_date=as_of,
+            horizon_days=horizon_days,
+            method=METHOD_PERSISTENCE,
+        )
+    )
+    problem, no_forecast_keys = _naive_problem(dataset, as_of, horizon_days)
+    naive = naive_fixed_order_simulation(problem, no_forecast_keys)
+    return ComparisonScenarios(naive=naive, optimised=optimised)
+
+
+def _naive_problem(
+    dataset: Dataset, as_of: date, horizon_days: int
+) -> tuple[RoutingProblem, list[SeriesKey]]:
+    """Build the §4.6 demo routing problem over **all** dataset series.
+
+    Persistence fills (§2.3) mirror the ``run_route`` forecast step exactly
+    (leakage-safe features at as_of); series without a persistence value keep
+    fill 0.0 and are returned separately so the simulation can label them.
+    """
+    grouped = group_by_series(dataset.readings)
+    target_date = as_of + timedelta(days=horizon_days)
+    fills: dict[SeriesKey, float] = {}
+    no_forecast_keys: list[SeriesKey] = []
+    for key in sorted(grouped):
+        features = build_feature_row(grouped[key], as_of)
+        record: ForecastRecord | None = None
+        if features is not None:
+            evaluation_case = EvaluationCase(
+                location_id=key[0],
+                material_type=key[1],
+                as_of_date=as_of,
+                target_date=target_date,
+                horizon_days=horizon_days,
+                truth_fill_pct=None,  # inference has no truth; baselines ignore it
+                truth_is_overfull=False,
+                features=features,
+            )
+            record = forecast(evaluation_case, METHOD_PERSISTENCE)
+        if record is None:
+            no_forecast_keys.append(key)
+            fills[key] = 0.0
+        else:
+            fills[key] = record.predicted_fill_pct
+
+    depot = demo_depot()
+    disposal = demo_disposal_site()
+    vehicle = demo_vehicle_type()
+    config = demo_routing_config()
+    coordinates = synthetic_stop_coordinates(fills.keys(), depot)
+    stops = [
+        Stop(
+            location_id=key[0],
+            material_type=key[1],
+            lat=coordinates[key][0],
+            lon=coordinates[key][1],
+            container_volume_litres=DEMO_CONTAINER_VOLUME_LITRES,
+            predicted_fill_pct=fills[key],
+            service_minutes=DEMO_STOP_SERVICE_MINUTES,
+        )
+        for key in sorted(fills)
+    ]
+    travel = build_travel_matrix(depot, [disposal], stops, config)
+    problem = RoutingProblem(
+        depot=depot,
+        disposal_sites=[disposal],
+        stops=stops,
+        vehicle_types=[vehicle],
+        travel=travel,
+        config=config,
+    )
+    return problem, no_forecast_keys
+
+
+def comparison() -> schemas.ComparisonResponse:
+    """§5.2.2 ComparisonResponse on the active dataset with the v1 fixed
+    defaults echoed (as_of 2026-09-30, horizon 28, persistence)."""
+    scenarios = run_comparison_scenarios(
+        store.dataset,
+        COMPARISON_AS_OF_DEFAULT,
+        COMPARISON_HORIZON_DAYS_DEFAULT,
+    )
+    optimised = scenarios.optimised
+    return schemas.ComparisonResponse(
+        as_of_date=COMPARISON_AS_OF_DEFAULT,
+        target_date=COMPARISON_AS_OF_DEFAULT + timedelta(days=COMPARISON_HORIZON_DAYS_DEFAULT),
+        horizon_days=COMPARISON_HORIZON_DAYS_DEFAULT,
+        method=METHOD_PERSISTENCE,
+        naive=_naive_scenario(scenarios.naive),
+        optimised=_optimised_scenario(optimised),
+        distance_provenance=optimised.solution.distance_provenance,
+        assumptions=_comparison_assumptions(optimised),
+    )
+
+
+def _naive_scenario(naive: NaiveSolution) -> schemas.ComparisonScenarioResponse:
+    return schemas.ComparisonScenarioResponse(
+        method="naive_fixed_order",
+        status=naive.status,
+        distance_m=naive.totals.distance_m,
+        duration_min=naive.totals.duration_min,
+        stops_served=naive.totals.stops_served,
+        stops_total=naive.totals.stops_total,
+        vehicles_available=DEMO_VEHICLE_COUNT_AVAILABLE,
+        vehicles_used=len(naive.routes),
+        collected_volume_litres=naive.totals.collected_volume_litres,
+        collected_weight_kg=naive.totals.collected_weight_kg,
+        unserved_count=len(naive.unserved),
+        recommended_trucks=naive.fleet_recommendation.count,
+        fleet_basis=schemas.FleetBasisResponse(
+            ceil_by_volume=naive.fleet_recommendation.basis.ceil_by_volume,
+            ceil_by_weight=naive.fleet_recommendation.basis.ceil_by_weight,
+        ),
+    )
+
+
+def _optimised_scenario(
+    optimised: schemas.RouteResponse,
+) -> schemas.OptimisedScenarioResponse:
+    solution = optimised.solution
+    return schemas.OptimisedScenarioResponse(
+        method="ortools",
+        status=solution.status,
+        distance_m=solution.totals.distance_m,
+        duration_min=solution.totals.duration_min,
+        stops_served=solution.totals.stops_served,
+        stops_total=solution.totals.stops_total,
+        vehicles_available=DEMO_VEHICLE_COUNT_AVAILABLE,
+        vehicles_used=len(solution.routes),
+        collected_volume_litres=solution.totals.collected_volume_litres,
+        collected_weight_kg=solution.totals.collected_weight_kg,
+        unserved_count=len(solution.unserved),
+        recommended_trucks=solution.fleet_recommendation.count,
+        fleet_basis=solution.fleet_recommendation.basis.model_copy(),
+        selected_count=len(optimised.selection.selected),
+        skipped_count=len(optimised.selection.skipped),
+    )
+
+
+def _comparison_assumptions(optimised: schemas.RouteResponse) -> list[str]:
+    """§5.2.2 assumption labels: the optimised pipeline labels plus the naive
+    order/zero-fill rules and the GLS run-variance note (contract §5.2.2)."""
+    return [
+        *optimised.assumptions,
+        f"{ASSUMPTION_LABEL} naive visiting order is fixed lexicographic "
+        "(location_id, material_type) — the data has no area field",
+        f"{ASSUMPTION_LABEL} naive zero-fill rule: series without a persistence "
+        "value at as_of are still visited and collect 0 L / 0 kg",
+        GLS_NOTE,
     ]

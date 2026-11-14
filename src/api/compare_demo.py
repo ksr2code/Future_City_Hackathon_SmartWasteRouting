@@ -5,12 +5,14 @@ pipeline and writes ``docs/demo_numbers.md``:
 
     python -m src.api.compare_demo
 
-Lives in the API layer (AGENTS boundaries): it orchestrates domain modules —
-the M10 ``run_route`` pipeline reused **exactly** (``src.api.services``:
-persistence forecast §2.3, as_of 2026-09-30, horizon_days 28 [demo
-assumption], default ``PolicyConfig`` §3.1, synthetic demo geography §4.5 and
-§4.6 demo config, solved by ``src.routing.solver.solve``) plus the naive
-scenario from ``src.routing.naive``.
+Lives in the API layer (AGENTS boundaries): both scenarios run in the shared
+core ``src.api.services.run_comparison_scenarios`` — the M10 ``run_route``
+pipeline reused **exactly** (persistence forecast §2.3, as_of 2026-09-30,
+horizon_days 28 [demo assumption], default ``PolicyConfig`` §3.1, synthetic
+demo geography §4.5 and §4.6 demo config, solved by ``src.routing.solver
+.solve``) plus the naive scenario from ``src.routing.naive`` — which also
+powers GET /api/comparison (§5.2.2). This module is CLI glue: upload, the
+markdown rendering below, and argparse.
 
 Naive scenario: the **same demo inputs** (same depot/disposal/vehicle/config
 values, same synthetic-coordinate derivation) but over **ALL** dataset series
@@ -33,43 +35,33 @@ import argparse
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from src.api import schemas as api_schemas
-from src.api.services import run_route, upload_dataset
-from src.data.schema import Dataset
-from src.forecasting.baseline import METHOD_PERSISTENCE, ForecastRecord, forecast
-from src.forecasting.features import SeriesKey, build_feature_row, group_by_series
-from src.forecasting.targets import EvaluationCase
-from src.routing.demo_config import (
-    DEMO_CONTAINER_VOLUME_LITRES,
-    DEMO_STOP_SERVICE_MINUTES,
-    DEMO_VEHICLE_COUNT_AVAILABLE,
-    demo_depot,
-    demo_disposal_site,
-    demo_routing_config,
-    demo_vehicle_type,
+from src.api.services import (
+    COMPARISON_AS_OF_DEFAULT,
+    COMPARISON_HORIZON_DAYS_DEFAULT,
+    DEMO_CSV_PATH,
+    GLS_NOTE,
+    run_comparison_scenarios,
+    upload_dataset,
 )
+from src.routing.demo_config import DEMO_VEHICLE_COUNT_AVAILABLE, demo_vehicle_type
 from src.routing.fleet import FleetRecommendation
-from src.routing.geography import build_travel_matrix, synthetic_stop_coordinates
-from src.routing.naive import NaiveSolution, naive_fixed_order_simulation
-from src.routing.schemas import RoutingProblem, Stop
+from src.routing.naive import NaiveSolution
 
-DEFAULT_CSV_PATH = Path("data/raw/glass_fill_levels_anonymized_f.csv")
+# CLI-facing names for the single server-side/API shared constants (§5.1/§5.2.2);
+# kept as module attributes so argparse defaults and external references
+# (``compare_demo.DEFAULT_CSV_PATH`` etc.) stay stable.
+DEFAULT_CSV_PATH = DEMO_CSV_PATH
 DEFAULT_OUTPUT_PATH = Path("docs/demo_numbers.md")
-DEFAULT_AS_OF = date(2026, 9, 30)
-DEFAULT_HORIZON_DAYS = 28  # [demo assumption] — observed median reading gap (§2.1)
+DEFAULT_AS_OF = COMPARISON_AS_OF_DEFAULT
+DEFAULT_HORIZON_DAYS = COMPARISON_HORIZON_DAYS_DEFAULT  # [demo assumption]
 
 DETOUR_NOTE = (
     'great-circle haversine x detour factor (§4.6) [demo assumption]; never "road '
     'distance" — no road network data exists [observed]'
-)
-GLS_NOTE = (
-    "Optimised totals vary slightly run-to-run: GUIDED LOCAL SEARCH runs under the "
-    "configured wall-clock solver time limit (contract §4.4 claims determinism as "
-    "same status + same invariants, not bitwise). The naive simulation is fully "
-    "deterministic."
 )
 
 
@@ -96,69 +88,6 @@ class ComparisonResult:
     markdown: str
 
 
-def _naive_problem(
-    dataset: Dataset, as_of: date, horizon_days: int
-) -> tuple[RoutingProblem, list[SeriesKey]]:
-    """Build the §4.6 demo routing problem over **all** dataset series.
-
-    Persistence fills (§2.3) mirror the ``run_route`` forecast step exactly
-    (leakage-safe features at as_of); series without a persistence value keep
-    fill 0.0 and are returned separately so the simulation can label them.
-    """
-    grouped = group_by_series(dataset.readings)
-    target_date = as_of + timedelta(days=horizon_days)
-    fills: dict[SeriesKey, float] = {}
-    no_forecast_keys: list[SeriesKey] = []
-    for key in sorted(grouped):
-        features = build_feature_row(grouped[key], as_of)
-        record: ForecastRecord | None = None
-        if features is not None:
-            evaluation_case = EvaluationCase(
-                location_id=key[0],
-                material_type=key[1],
-                as_of_date=as_of,
-                target_date=target_date,
-                horizon_days=horizon_days,
-                truth_fill_pct=None,  # inference has no truth; baselines ignore it
-                truth_is_overfull=False,
-                features=features,
-            )
-            record = forecast(evaluation_case, METHOD_PERSISTENCE)
-        if record is None:
-            no_forecast_keys.append(key)
-            fills[key] = 0.0
-        else:
-            fills[key] = record.predicted_fill_pct
-
-    depot = demo_depot()
-    disposal = demo_disposal_site()
-    vehicle = demo_vehicle_type()
-    config = demo_routing_config()
-    coordinates = synthetic_stop_coordinates(fills.keys(), depot)
-    stops = [
-        Stop(
-            location_id=key[0],
-            material_type=key[1],
-            lat=coordinates[key][0],
-            lon=coordinates[key][1],
-            container_volume_litres=DEMO_CONTAINER_VOLUME_LITRES,
-            predicted_fill_pct=fills[key],
-            service_minutes=DEMO_STOP_SERVICE_MINUTES,
-        )
-        for key in sorted(fills)
-    ]
-    travel = build_travel_matrix(depot, [disposal], stops, config)
-    problem = RoutingProblem(
-        depot=depot,
-        disposal_sites=[disposal],
-        stops=stops,
-        vehicle_types=[vehicle],
-        travel=travel,
-        config=config,
-    )
-    return problem, no_forecast_keys
-
-
 def run_comparison(
     csv_path: Path,
     output_path: Path,
@@ -167,9 +96,11 @@ def run_comparison(
 ) -> ComparisonResult:
     """Run both scenarios on ``csv_path`` and render the markdown document.
 
-    The optimised scenario reuses the M10 pipeline untouched (upload →
-    ``run_route``); the naive scenario shares the same demo config values and
-    coordinate derivation over all series.
+    The scenarios run in the shared core ``services
+    .run_comparison_scenarios`` (also powering GET /api/comparison, §5.2.2):
+    the optimised scenario reuses the M10 pipeline untouched (upload →
+    ``run_route`` on the active store dataset); the naive scenario shares the
+    same demo config values and coordinate derivation over all series.
     """
     load_result = upload_dataset(csv_path.read_bytes(), csv_path.name)
     if load_result.errors:
@@ -179,14 +110,9 @@ def run_comparison(
         )
     summary = load_result.dataset.summary
 
-    optimised = run_route(
-        api_schemas.RouteRequest(
-            as_of_date=as_of, horizon_days=horizon_days, method=METHOD_PERSISTENCE
-        )
-    )
-
-    problem, no_forecast_keys = _naive_problem(load_result.dataset, as_of, horizon_days)
-    naive = naive_fixed_order_simulation(problem, no_forecast_keys)
+    scenarios = run_comparison_scenarios(load_result.dataset, as_of, horizon_days)
+    naive = scenarios.naive
+    optimised = scenarios.optimised
 
     markdown = _render_markdown(
         csv_path=csv_path,

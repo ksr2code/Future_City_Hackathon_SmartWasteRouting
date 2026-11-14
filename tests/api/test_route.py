@@ -16,12 +16,14 @@ ALL_ENDPOINTS = {
     "/health",
     "/api/health",
     "/api/datasets",
+    "/api/datasets/demo",
     "/api/summary",
     "/api/containers",
     "/api/config",
     "/api/forecasts",
     "/api/candidates",
     "/api/route",
+    "/api/comparison",
 }
 
 

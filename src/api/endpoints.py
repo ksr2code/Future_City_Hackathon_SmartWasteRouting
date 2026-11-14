@@ -7,14 +7,26 @@ all business logic lives in the §1-§4 modules. All paths mount under the
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, UploadFile
 
 from src.api import schemas, services
 from src.api.errors import ApiError
+from src.data.schema import LoadResult
 
 router = APIRouter(prefix="/api")
 
 _UPLOAD_ERROR_MESSAGE = "dataset rejected: {n} validation error(s); active dataset unchanged"
+
+
+def _upload_error_detail(result: LoadResult) -> dict[str, Any]:
+    """Full §1.4 error list for a rejected upload (§5.3) — shared by the
+    multipart upload and the server-side demo-dataset endpoints."""
+    return {
+        "message": _UPLOAD_ERROR_MESSAGE.format(n=len(result.errors)),
+        "errors": [services.validation_error_item(error).model_dump() for error in result.errors],
+    }
 
 
 @router.get("/health", response_model=dict[str, str])
@@ -31,15 +43,19 @@ async def upload_dataset(file: UploadFile) -> schemas.DatasetUploadResponse:
     source_name = file.filename or "uploaded.csv"
     result = services.upload_dataset(content, source_name)
     if result.errors:
-        raise ApiError(
-            status_code=422,
-            detail={
-                "message": _UPLOAD_ERROR_MESSAGE.format(n=len(result.errors)),
-                "errors": [
-                    services.validation_error_item(error).model_dump() for error in result.errors
-                ],
-            },
-        )
+        raise ApiError(status_code=422, detail=_upload_error_detail(result))
+    return services.upload_response(result)
+
+
+@router.post("/datasets/demo", response_model=schemas.DatasetUploadResponse)
+async def upload_demo_dataset() -> schemas.DatasetUploadResponse:
+    """Load the server-side demo CSV (§5.1): one fixed server-side path,
+    never client-supplied. 404 when the file is absent; 422 with the full
+    §1 error list and the active dataset untouched on invalid rows (§5.3);
+    success replaces the active dataset with a ``demo:`` source_name."""
+    result = services.load_demo_dataset()
+    if result.errors:
+        raise ApiError(status_code=422, detail=_upload_error_detail(result))
     return services.upload_response(result)
 
 
@@ -78,3 +94,10 @@ async def route(request: schemas.RouteRequest) -> schemas.RouteResponse:
     """Pipeline forecast -> policy -> geography -> solve; always returns
     selection + solution, infeasible/timeout included (§5.3)."""
     return services.run_route(request)
+
+
+@router.get("/comparison", response_model=schemas.ComparisonResponse)
+async def comparison() -> schemas.ComparisonResponse:
+    """§5.2.2 naive-vs-optimised comparison on the active dataset with the
+    fixed v1 defaults echoed; 404 without a dataset (§5.1)."""
+    return services.comparison()

@@ -17,3 +17,9 @@ class ApiError(Exception):
         super().__init__(str(detail))
         self.status_code = status_code
         self.detail = detail
+
+
+class DemoDatasetMissingError(RuntimeError):
+    """The server-side demo CSV constant path does not exist (POST
+    /api/datasets/demo -> 404; contract §5.1: the path is never
+    client-supplied, so absence is a server-side condition)."""
