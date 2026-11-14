@@ -593,11 +593,16 @@ def _apply_shift_limits(
     return shifted_routes, removed_unserved
 
 
-def _unserved_reason(stop: Stop, problem: RoutingProblem, vehicles: list[VehicleType]) -> str:
-    """Deterministic reason string for a stop the solver had to drop (§4.4)."""
+def _unserved_reason(stop: Stop, problem: RoutingProblem) -> str:
+    """Deterministic reason string for a stop the solver had to drop (§4.4).
+
+    Fleet size/capacity figures come from the UNexpanded problem.vehicle_types
+    (one entry per type). Summing over the per-vehicle expanded list would
+    multiply count_available by itself (one type x 3 vehicles -> "9 vehicles").
+    """
     volume, weight = _stop_collected_quantities(stop, problem)
-    max_volume = max(vehicle_type.volume_capacity_litres for vehicle_type in vehicles)
-    max_weight = max(vehicle_type.weight_capacity_kg for vehicle_type in vehicles)
+    max_volume = max(vehicle_type.volume_capacity_litres for vehicle_type in problem.vehicle_types)
+    max_weight = max(vehicle_type.weight_capacity_kg for vehicle_type in problem.vehicle_types)
     if volume > max_volume:
         return (
             f"collected volume {volume} L exceeds the largest vehicle volume "
@@ -613,7 +618,7 @@ def _unserved_reason(stop: Stop, problem: RoutingProblem, vehicles: list[Vehicle
     minimum_trip_min = _minimum_round_trip_minutes(stop, problem)
     if minimum_trip_min > problem.config.max_shift_minutes:
         return _shift_limit_reason(minimum_trip_min, problem)
-    available = sum(vehicle_type.count_available for vehicle_type in vehicles)
+    available = sum(vehicle_type.count_available for vehicle_type in problem.vehicle_types)
     return (
         "no feasible insertion within the available fleet "
         f"({available} vehicles) and the configured capacity/shift limits"
@@ -691,7 +696,6 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
             distance_provenance=provenance,
         )
 
-    vehicles = _vehicle_type_per_vehicle(problem)
     routes, visited_nodes = _extract_routes(problem, layout, manager, routing, assignment)
     routes, truncated_unserved = _apply_shift_limits(routes, problem)
     dropped_nodes = sorted(
@@ -711,7 +715,7 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
                         layout.stops_by_node[node].location_id,
                         layout.stops_by_node[node].material_type,
                     ),
-                    reason=_unserved_reason(layout.stops_by_node[node], problem, vehicles),
+                    reason=_unserved_reason(layout.stops_by_node[node], problem),
                 )
                 for node in dropped_nodes
             ],

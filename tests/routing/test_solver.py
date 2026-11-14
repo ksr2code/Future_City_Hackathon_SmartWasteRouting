@@ -38,6 +38,7 @@ from src.routing.solver import (
     RoutingSolution,
     RoutingSolverError,
     _map_status,
+    _unserved_reason,
     solve,
 )
 
@@ -403,6 +404,36 @@ def test_unserved_reasons_deterministic() -> None:
     assert [u.stop_key for u in first.unserved] == [u.stop_key for u in second.unserved]
 
 
+def test_unserved_reason_reports_true_fleet_size_not_expanded() -> None:
+    # Regression (M12 e2e smoke): the reason must state the true fleet size,
+    # summed over the UNexpanded vehicle_types, never over the per-vehicle
+    # expanded list (one type x count 3 would multiply to "9 vehicles").
+    # The stop below fits every capacity/shift limit -> insertion branch.
+    fixture = make_fixture(
+        stops=[make_stop("loc-1")],
+        vehicles=[make_vehicle(count_available=3)],
+    )
+    reason = _unserved_reason(fixture.stops[0], fixture.problem)
+    assert "no feasible insertion" in reason
+    assert "(3 vehicles)" in reason
+    assert "(9 vehicles)" not in reason
+
+    multi_type = make_fixture(
+        stops=[make_stop("loc-1")],
+        vehicles=[
+            make_vehicle(vehicle_id="small", count_available=1),
+            make_vehicle(
+                vehicle_id="large",
+                volume_capacity_litres=3_000,
+                weight_capacity_kg=2_500,
+                count_available=2,
+            ),
+        ],
+    )
+    reason_multi = _unserved_reason(multi_type.stops[0], multi_type.problem)
+    assert "(3 vehicles)" in reason_multi
+
+
 def test_empty_stops_returns_zeroed_solution() -> None:
     fixture = make_fixture(stops=[])
     solution = solve(fixture.problem)
@@ -449,9 +480,7 @@ def test_route_distance_and_duration_match_matrix_walk() -> None:
             node.id if not isinstance(node, Stop) else stop_point_id(node)
             for node in route.sequence
         ]
-        walk_distance = sum(
-            distance[ids.index(a)][ids.index(b)] for a, b in pairwise(seq_ids)
-        )
+        walk_distance = sum(distance[ids.index(a)][ids.index(b)] for a, b in pairwise(seq_ids))
         walk_duration = sum(
             duration[ids.index(a)][ids.index(b)] + services[a] for a, b in pairwise(seq_ids)
         )
