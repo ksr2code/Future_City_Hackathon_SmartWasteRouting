@@ -11,3 +11,8 @@ dist/
 *.sqlite
 data/derived/
 data/raw/
+.DS_Store
+*.egg-info/
+*.tsbuildinfo
+.coverage
+htmlcov/

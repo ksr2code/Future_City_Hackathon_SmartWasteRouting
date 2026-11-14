@@ -1,0 +1,1 @@
+"""Collection stop-selection policy."""
