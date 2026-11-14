@@ -4,9 +4,9 @@
  * return {status:"ok"} for every URL — nothing may crash), the auto-candidates
  * POST body (horizon 7, as_of = date_max) and the derived-savings label rule.
  *
- * Wording discipline (docs/contracts.md §5.2.2): the data has no collection
- * events, so "emptyings" (EN) / "Leerungen" (DE) must never appear — historical
- * shares are shares of *readings*.
+ * Wording discipline (docs/contracts.md §1.5/§5.2.2 v4 flip): every row is an
+ * **emptying record** (DE "Leerungsdaten") [representative-stated] — human
+ * strings say so; JSON field names keep the historical `readings` tokens.
  */
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { Overview } from "./Overview";
@@ -16,6 +16,7 @@ import {
   comparisonFixture,
   comparisonMedianOfRunsFixture,
   daysToFullFixture,
+  scenariosFixture,
   selectionFixture,
   summaryFixture,
   summaryWithFillStats,
@@ -47,12 +48,14 @@ const happyRoutes = (): Record<string, (args: FetchArgs) => Response> => ({
   "POST /api/candidates": () => jsonResponse(selectionFixture),
   "GET /api/comparison": () => jsonResponse(comparisonFixture),
   "GET /api/days-to-full": () => jsonResponse(daysToFullFixture),
+  // W1/W2 toggle card (server defaults, empty body).
+  "POST /api/scenarios": () => jsonResponse(scenariosFixture),
 });
 
 const emptySummary: DatasetSummary | null = null;
 
 describe("Overview — wording discipline", () => {
-  it("renders EN strings and never shows the word 'emptyings' (readings, not collection events)", async () => {
+  it("renders EN strings with the v4 'emptying records' wording (every row is one emptying event)", async () => {
     stubRoutes(happyRoutes());
     render(
       <Overview
@@ -70,14 +73,15 @@ describe("Overview — wording discipline", () => {
     const text = document.body.textContent ?? "";
     expect(text).toContain("Know which glass containers need emptying");
     expect(text).toContain("Today's recommendation");
-    expect(text).toContain("Readings with full containers");
+    expect(text).toContain("Emptying records with full containers");
     expect(text).toContain("10.2 %");
     // Threshold note interpolated from fill_stats, not hardcoded.
     expect(text).toContain("at or above 80 % fill");
-    expect(text).not.toContain("emptyings");
+    // v4 wording flip: human strings name the emptying records (§1.5).
+    expect(text).toContain("emptying records");
   });
 
-  it("renders DE strings and never shows the word 'Leerungen'", async () => {
+  it("renders DE strings with the 'Leerungsdaten' wording", async () => {
     stubRoutes(happyRoutes());
     render(
       <Overview
@@ -95,9 +99,11 @@ describe("Overview — wording discipline", () => {
     const text = document.body.textContent ?? "";
     expect(text).toContain("Wissen, welche Glasbehälter geleert werden müssen");
     expect(text).toContain("Empfehlung für heute");
-    expect(text).toContain("Messungen mit vollem Behälter");
+    expect(text).toContain("Leerungsdaten mit vollem Behälter");
     expect(text).toContain("Glasfarben");
-    expect(text).not.toContain("Leerungen");
+    // v4 wording flip (§1.5); "Leerungen" alone is a substring of
+    // "Leerungsdaten" — asserted via the full word instead.
+    expect(text).toContain("Leerungsdaten");
   });
 });
 
@@ -239,17 +245,21 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     expect(document.querySelector('[data-testid="comparison-steps"]')).not.toBeNull();
     const steps = document.body.textContent ?? "";
     // Status quo (real capture values, straight-line-derived; units present).
+    expect(steps).toContain("355,474 m");
+    expect(steps).toContain("60 / 637");
+    expect(steps).toContain("10.5 m/kg");
+    // Sweep-all upper bound.
     expect(steps).toContain("454,623 m");
     expect(steps).toContain("50 / 1,338");
-    expect(steps).toContain("10.1 m/kg");
+    expect(steps).toContain("12.6 m/kg");
     // Selection-effect sweep.
     expect(steps).toContain("527,021 m");
     expect(steps).toContain("38 / 458");
-    expect(steps).toContain("10.6 m/kg");
+    expect(steps).toContain("13.2 m/kg");
     // Optimised (median of 5 solves).
     expect(steps).toContain("70,175 m");
     expect(steps).toContain("34 / 458");
-    expect(steps).toContain("3.1 m/kg");
+    expect(steps).toContain("3.9 m/kg");
     expect(steps).toContain("median of 5 solves");
     // v3 per-scenario cost rows (3 trucks in use × 500 EUR/truck-day [predicted]).
     expect(steps).toContain("1,500 EUR/day · 300,000 EUR/year");
@@ -264,12 +274,13 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     expect(budget).toContain("49,500 EUR");
     expect(budget).toContain("9,900,000 EUR");
     expect(budget).toContain("predicted");
-    // v3 days-to-full KPI ([predicted] estimates; all numbers from the API).
+    // v3 days-to-full KPI ([predicted] estimates from emptying records; all
+    // numbers from the API, never hardcoded).
     const dtf = document.querySelector('[data-testid="keynum-days-to-full"]')?.textContent ?? "";
-    expect(dtf).toContain("48.3 d");
-    expect(dtf).toContain("1,213");
+    expect(dtf).toContain("59.3 d");
+    expect(dtf).toContain("1,303");
     expect(dtf).toContain("1,338");
-    expect(dtf).toContain("median_positive_pair_rate");
+    expect(dtf).toContain("fill_at_emptying_rate");
   });
 
   it("labels the negative selection gain honestly (never spun positive)", async () => {
@@ -446,6 +457,66 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     const error = document.querySelector('[data-testid="comparison-card"] [data-testid="error-state"]');
     expect(error?.textContent).toContain("Could not compute the comparison");
     expect(error?.textContent).toContain("missing scenarios/gains/determinism");
+  });
+});
+
+describe("Overview — filling-time tanks (W3, §5.2.3 v2 stats_by_material)", () => {
+  it("renders per-material tanks with lower-bound notes and the mandatory §1.5 caveat", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const tanks = document.querySelector('[data-testid="filling-tanks"]')?.textContent ?? "";
+    expect(tanks).toContain("Filling time per material");
+    // Median days per material — fixture values (real-capture traced).
+    expect(tanks).toContain("121.9 d");
+    expect(tanks).toContain("52.0 d");
+    expect(tanks).toContain("38.1 d");
+    // Target % interpolated from the response, never hardcoded.
+    expect(tanks).toContain("90 %");
+    // Lower-bound notes per material (fixture lb shares 36.3/73.6/88.5).
+    expect(tanks).toContain("36.3 %");
+    expect(tanks).toContain("73.6 %");
+    expect(tanks).toContain("88.5 %");
+    // Mandatory §1.5 caveat rendered verbatim from the API assumptions.
+    const caveat = document.querySelector('[data-testid="tanks-caveat"]')?.textContent ?? "";
+    expect(caveat).toContain("not how fast it would have filled");
+    expect(caveat).toContain("no unobserved emptying between records");
+  });
+
+  it("hides the tanks section when stats_by_material is missing (degrades, never crashes)", async () => {
+    stubRoutes({
+      ...happyRoutes(),
+      "GET /api/days-to-full": () => {
+        const { stats_by_material, ...rest } = daysToFullFixture;
+        return jsonResponse(rest);
+      },
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    expect(document.querySelector('[data-testid="filling-tanks"]')).toBeNull();
+    expect(document.querySelector('[data-testid="overview-root"]')).not.toBeNull();
   });
 });
 

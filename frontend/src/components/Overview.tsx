@@ -3,6 +3,7 @@ import {
   ApiError,
   fetchComparison,
   fetchDaysToFull,
+  MATERIAL_TYPES,
   runCandidates,
   type ComparisonMethod,
   type ComparisonResponse,
@@ -17,7 +18,9 @@ import { formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "
 import { t, tf, type Lang, type TranslationKey } from "../lib/i18n";
 import { DemoLoadButton } from "./DemoLoadButton";
 import { GlassLegend } from "./GlassLegend";
+import { PresentationMode } from "./PresentationMode";
 import { TechDetails } from "./TechDetails";
+import { TodayPlanToggle } from "./TodayPlanToggle";
 import { EmptyState, ErrorState, LoadingState } from "./states";
 
 /**
@@ -31,8 +34,9 @@ import { EmptyState, ErrorState, LoadingState } from "./states";
  * the TechDetails collapsible.
  */
 
-/** Recommendation horizon for the overview (task-fixed 7 days) [demo assumption]. */
-const RECOMMENDATION_HORIZON_DAYS = 7;
+/** Recommendation horizon for the overview (task-fixed 7 days) [demo assumption].
+ *  Exported so the presentation mode reuses the same labelled constant. */
+export const RECOMMENDATION_HORIZON_DAYS = 7;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TOP_EXAMPLES = 5;
 
@@ -89,12 +93,14 @@ function formatGain(gain: number | null | undefined): string {
 }
 
 /**
- * Defensive §5.2.2 v2 payload guard: `scenarios` must be the fixed §4.7 array
- * of three well-formed scenarios, `gains`/`optimised_determinism` present.
+ * Defensive §5.2.2 v4 payload guard: `scenarios` must be the fixed §4.7 v4
+ * array of FOUR well-formed scenarios (naive_fixed_frequency FIRST, then
+ * sweep_all / sweep_selected / ortools), `gains`/`optimised_determinism`
+ * present.
  */
 function validComparison(payload: ComparisonResponse | null): ComparisonResponse | null {
   if (payload === null) return null;
-  if (!Array.isArray(payload.scenarios) || payload.scenarios.length !== 3) return null;
+  if (!Array.isArray(payload.scenarios) || payload.scenarios.length !== 4) return null;
   if (!payload.scenarios.every((s) => isScenario(s))) return null;
   const det = payload.optimised_determinism;
   if (
@@ -116,7 +122,7 @@ function scenarioByMethod(
   return s !== undefined ? s : null;
 }
 
-/** Defensive §5.2.3 v3 payload guard — malformed payloads degrade, never crash. */
+/** Defensive §5.2.3 v2 payload guard — malformed payloads degrade, never crash. */
 function validDaysToFull(payload: DaysToFullResponse | null): DaysToFullResponse | null {
   if (payload === null) return null;
   const stats = payload.stats;
@@ -128,12 +134,29 @@ function validDaysToFull(payload: DaysToFullResponse | null): DaysToFullResponse
   return payload;
 }
 
+/**
+ * §5.2.2/§4.7 v4 observed service anchor — the service level rendered beside
+ * every cost (§6: cost is never shown alone). Null-safe: a missing/malformed
+ * anchor renders the explicit "unavailable" note instead of a fabricated %.
+ */
+function validServiceAnchor(
+  anchor: ComparisonResponse["observed_service_anchor"] | undefined,
+): { pctText: string } | null {
+  if (anchor === null || anchor === undefined || typeof anchor !== "object") return null;
+  if (anchor.basis !== "observed_emptying_records") return null;
+  const pct = anchor.share_full_or_overfull_pct;
+  if (!isFiniteNumber(pct)) return null;
+  return { pctText: `${pct.toFixed(1)} %` };
+}
+
 /** EUR amounts from the v3 cost fields — unit-explicit, "—" when missing. */
 function formatEur(value: number | null | undefined): string {
   return isFiniteNumber(value) ? `${value.toLocaleString("en-US")} EUR` : "— EUR";
 }
 
-/** Defensive §5.2.2 v3 fleet-budget guard — malformed payloads hide the card. */
+/**
+ * Defensive §5.2.2 v3 fleet-budget guard — malformed payloads hide the card.
+ */
 function validFleetBudget(budget: FleetBudget | null | undefined): FleetBudget | null {
   if (budget === null || budget === undefined || typeof budget !== "object") return null;
   if (
@@ -146,6 +169,28 @@ function validFleetBudget(budget: FleetBudget | null | undefined): FleetBudget |
     return null;
   }
   return budget;
+}
+
+/**
+ * Defensive §5.2.3 v2 stats_by_material guard (W3 tanks): all three materials
+ * must carry finite series counts; median_days may be null (no estimate) —
+ * the tank for that material degrades to "—" instead of being dropped.
+ */
+function validStatsByMaterial(
+  payload: DaysToFullResponse | null,
+): DaysToFullResponse["stats_by_material"] | null {
+  const byMaterial = payload?.stats_by_material;
+  if (byMaterial === null || byMaterial === undefined || typeof byMaterial !== "object") {
+    return null;
+  }
+  for (const material of ["brown", "green", "white"] as const) {
+    const stats = byMaterial[material];
+    if (typeof stats !== "object" || stats === null) return null;
+    if (!isFiniteNumber(stats.series_total) || !isFiniteNumber(stats.series_with_estimate)) {
+      return null;
+    }
+  }
+  return byMaterial;
 }
 
 /** Per-scenario cost row value (§5.2.2 v3), e.g. "1,500 EUR/day · 300,000 EUR/year". */
@@ -180,6 +225,9 @@ export function Overview({
   const [daysToFull, setDaysToFull] = useState<DaysToFullResponse | null>(null);
   const [daysToFullLoading, setDaysToFullLoading] = useState(false);
   const [daysToFullError, setDaysToFullError] = useState<string | null>(null);
+
+  // W5: presentation mode overlay (opened from the hero button).
+  const [presentationOpen, setPresentationOpen] = useState(false);
 
   const asOf =
     typeof summary?.date_max === "string" && ISO_DATE.test(summary.date_max)
@@ -307,8 +355,10 @@ export function Overview({
   const selected = selection?.selected ?? [];
   const skipped = selection?.skipped ?? [];
   const noForecastCount = skipped.filter((s) => s.reason_code === "no_forecast").length;
-  // §5.2.2 v2: fixed-order scenarios (naive_sweep_all, naive_sweep_selected, ortools).
+  // §5.2.2 v4: naive_fixed_frequency (status quo) first, then the three
+  // §4.7 scenarios (sweep_all, sweep_selected, ortools).
   const comparisonValid = validComparison(comparison);
+  const fixedFreq = scenarioByMethod(comparisonValid, "naive_fixed_frequency");
   const sweepAll = scenarioByMethod(comparisonValid, "naive_sweep_all");
   const sweepSelected = scenarioByMethod(comparisonValid, "naive_sweep_selected");
   const optimised = scenarioByMethod(comparisonValid, "ortools");
@@ -324,10 +374,23 @@ export function Overview({
     sweepAll.distance_m > 0
       ? (gains.total_gain_m / sweepAll.distance_m) * 100
       : null;
-  // §5.2.3 v3 stats — all numbers come from the API, never hardcoded.
+  // §5.2.3 v2 stats — all numbers come from the API, never hardcoded.
   const dtfStats = validDaysToFull(daysToFull)?.stats ?? null;
   // v3 fleet budget — validated once, reused by guard and card body.
   const fleetBudget = validFleetBudget(comparisonValid?.fleet_budget ?? null);
+  // §6: service anchor rendered beside every cost row in the comparison card.
+  const serviceAnchor = validServiceAnchor(comparisonValid?.observed_service_anchor);
+  // W3 tanks: per-material filling times from the §5.2.3 v2 payload.
+  const statsByMaterial = validStatsByMaterial(daysToFull);
+  const maxMedianDays =
+    statsByMaterial !== null
+      ? Math.max(
+          ...MATERIAL_TYPES.map((m) => {
+            const v = statsByMaterial[m].median_days;
+            return typeof v === "number" && Number.isFinite(v) ? v : 0;
+          }),
+        )
+      : 0;
 
   return (
     <div className="space-y-4" data-testid="overview-root">
@@ -337,7 +400,17 @@ export function Overview({
           <h2 className="max-w-3xl text-xl font-bold text-slate-900">
             {t(lang, "overview.headline")}
           </h2>
-          <GlassLegend lang={lang} />
+          <div className="flex items-center gap-3">
+            <GlassLegend lang={lang} />
+            <button
+              type="button"
+              onClick={() => setPresentationOpen(true)}
+              data-testid="presentation-open"
+              className="rounded bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-700"
+            >
+              {t(lang, "overview.presentation.open")}
+            </button>
+          </div>
         </div>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-600">
           {t(lang, "overview.problem")}
@@ -440,6 +513,70 @@ export function Overview({
         </div>
       ) : null}
 
+      {/* W3: filling time per material (§5.2.3 v2 stats_by_material) with the
+          mandatory §1.5 caveat near the rates — [predicted], never observed. */}
+      {!summaryLoading && summaryError === null && hasDataset && statsByMaterial !== null && daysToFull !== null ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="filling-tanks">
+          <h3 className="text-base font-semibold text-slate-900">{t(lang, "overview.tanks.title")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            {tf(lang, "overview.tanks.note", { pct: `${daysToFull.target_pct} %` })}
+          </p>
+          <div className="mt-3 space-y-2">
+            {MATERIAL_TYPES.map((material) => {
+              const stats = statsByMaterial[material];
+              const median =
+                typeof stats.median_days === "number" && Number.isFinite(stats.median_days)
+                  ? `${stats.median_days.toFixed(1)} d`
+                  : "— d";
+              const widthPct =
+                maxMedianDays > 0 &&
+                typeof stats.median_days === "number" &&
+                Number.isFinite(stats.median_days)
+                  ? Math.max(4, (stats.median_days / maxMedianDays) * 100)
+                  : 0;
+              const swatch =
+                material === "brown"
+                  ? "bg-amber-800"
+                  : material === "green"
+                    ? "bg-emerald-600"
+                    : "bg-slate-400";
+              const lowerBoundRaw = stats.lower_bound_share_pct;
+              const lbPct =
+                typeof lowerBoundRaw === "number" && Number.isFinite(lowerBoundRaw)
+                  ? lowerBoundRaw
+                  : null;
+              return (
+                <div key={material} className="text-xs text-slate-700" data-testid={`tank-${material}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-medium">{t(lang, `legend.${material}` as TranslationKey)}</span>
+                    <span className="font-semibold text-slate-900">{median}</span>
+                  </div>
+                  <div className="mt-1 h-3 w-full overflow-hidden rounded bg-slate-100">
+                    <div className={`h-full ${swatch}`} style={{ width: `${widthPct}%` }} />
+                  </div>
+                  {lbPct !== null && lbPct > 0 ? (
+                    <p className="mt-0.5 text-amber-700">
+                      {tf(lang, "overview.tanks.lowerBound", {
+                        pct: `${lbPct.toFixed(1)} %`,
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {/* Mandatory §1.5 caveat + model assumptions — echoed by the API, rendered verbatim. */}
+          <div className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2" data-testid="tanks-caveat">
+            <p className="text-xs font-semibold text-amber-900">{t(lang, "overview.tanks.caveatTitle")}</p>
+            <ul className="mt-1 list-disc pl-4 text-xs leading-relaxed text-amber-800">
+              {daysToFull.assumptions.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      ) : null}
+
       {/* Today's recommendation: N empty / M wait + top examples with reasons */}
       {!summaryLoading && summaryError === null && hasDataset ? (
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="recommendation">
@@ -499,6 +636,11 @@ export function Overview({
         </section>
       ) : null}
 
+      {/* Today ↔ with-our-plan toggle: cost + service always together (§6, W1/W2) */}
+      {!summaryLoading && summaryError === null && hasDataset ? (
+        <TodayPlanToggle lang={lang} datasetVersion={datasetVersion} recalculateKey={recalculateKey} />
+      ) : null}
+
       {/* How it works — static, shown even before data is loaded */}
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="how-strip">
         <h3 className="text-base font-semibold text-slate-900">{t(lang, "overview.how.title")}</h3>
@@ -531,9 +673,51 @@ export function Overview({
           <div className="mt-3"><EmptyState label={t(lang, "overview.state.comparisonNoDataset")} /></div>
         ) : null}
 
-        {sweepAll !== null && sweepSelected !== null && optimised !== null && !comparisonLoading ? (
+        {fixedFreq !== null &&
+        sweepAll !== null &&
+        sweepSelected !== null &&
+        optimised !== null &&
+        !comparisonLoading ? (
           <div className="mt-3 space-y-2">
+            {serviceAnchor !== null ? (
+              <p
+                className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900"
+                data-testid="comparison-service-anchor"
+              >
+                {t(lang, "col.service")}:{" "}
+                {tf(lang, "overview.compare.serviceAnchor", { pct: serviceAnchor.pctText })}
+              </p>
+            ) : (
+              <p
+                className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                data-testid="comparison-service-anchor"
+              >
+                {t(lang, "overview.compare.serviceAnchorUnavailable")}
+              </p>
+            )}
             <ol className="space-y-2" data-testid="comparison-steps">
+              <ComparisonStep
+                index={1}
+                title={t(lang, "overview.compare.step0.title")}
+                rows={[
+                  [t(lang, "col.distance"), formatMetres(fixedFreq.distance_m)],
+                  [
+                    t(lang, "col.stopsServed"),
+                    `${fixedFreq.stops_served.toLocaleString("en-US")} / ${fixedFreq.stops_total.toLocaleString("en-US")}`,
+                  ],
+                  [t(lang, "col.duration"), formatMinutes(fixedFreq.duration_min)],
+                  [t(lang, "col.trucks"), `${fixedFreq.recommended_trucks} ${t(lang, "unit.vehicles")}`],
+                  [t(lang, "col.volume"), formatLitres(fixedFreq.collected_volume_litres)],
+                  [t(lang, "col.weight"), formatKg(fixedFreq.collected_weight_kg)],
+                  [t(lang, "col.cost"), formatCostRow(fixedFreq)],
+                  [
+                    t(lang, "col.distancePerKg"),
+                    fixedFreq.distance_per_kg_m !== null
+                      ? `${fixedFreq.distance_per_kg_m.toFixed(1)} m/kg`
+                      : "— m/kg",
+                  ],
+                ]}
+              />
               <ComparisonStep
                 index={1}
                 title={t(lang, "overview.compare.step1.title")}
@@ -643,6 +827,11 @@ export function Overview({
             <p className="text-xs leading-relaxed text-slate-500" data-testid="comparison-perkg-note">
               {t(lang, "overview.compare.perKgNote")}
             </p>
+            {optimised.travel_time_mode === "fixed_per_leg" ? (
+              <p className="text-xs leading-relaxed text-slate-500" data-testid="comparison-flatmode-note">
+                {t(lang, "overview.compare.flatModeNote")}
+              </p>
+            ) : null}
             {savingsPct !== null ? (
               <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-savings">
                 {tf(lang, "overview.compare.savings", { pct: `${savingsPct.toFixed(1)} %` })}
@@ -718,6 +907,15 @@ export function Overview({
       <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800" data-testid="overview-calmnote">
         {t(lang, "overview.calmnote")}
       </p>
+
+      {/* W5 presentation overlay (6 slides, ←/→, Esc; §6 labels stay visible) */}
+      {presentationOpen ? (
+        <PresentationMode
+          lang={lang}
+          summary={summary}
+          onClose={() => setPresentationOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -776,11 +974,13 @@ function ExampleList({
 /** Short scenario label for the technical-details statuses line. */
 function scenarioShortLabel(lang: Lang, method: ComparisonMethod): string {
   const key: TranslationKey =
-    method === "naive_sweep_all"
-      ? "overview.compare.step1.short"
-      : method === "naive_sweep_selected"
-        ? "overview.compare.step2.short"
-        : "overview.compare.step3.short";
+    method === "naive_fixed_frequency"
+      ? "overview.compare.step0.short"
+      : method === "naive_sweep_all"
+        ? "overview.compare.step1.short"
+        : method === "naive_sweep_selected"
+          ? "overview.compare.step2.short"
+          : "overview.compare.step3.short";
   return t(lang, key);
 }
 

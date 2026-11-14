@@ -139,22 +139,26 @@ describe("api client (§5)", () => {
     expect(config.routing.container_volume_litres).toBe(1900);
   });
 
-  it("fetchComparison GETs /api/comparison and parses the §5.2.2 v2 payload", async () => {
+  it("fetchComparison GETs /api/comparison and parses the §5.2.2 v4 payload", async () => {
     const fetchMock = stubJsonFetch(() => jsonResponse(comparisonFixture));
 
     const comparison = await fetchComparison();
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/comparison");
-    // Fixed §4.7 scenario order.
+    // Fixed §4.7 v4 scenario order: naive_fixed_frequency (status quo) FIRST.
     expect(comparison.scenarios.map((s) => s.method)).toEqual([
+      "naive_fixed_frequency",
       "naive_sweep_all",
       "naive_sweep_selected",
       "ortools",
     ]);
-    expect(comparison.scenarios[0]?.distance_m).toBe(454623);
-    expect(comparison.scenarios[2]?.distance_m).toBe(70175);
+    expect(comparison.scenarios[0]?.distance_m).toBe(355474);
+    expect(comparison.scenarios[3]?.distance_m).toBe(70175);
     // Nullable per-metrics are preserved, never coerced.
-    expect(comparison.scenarios[2]?.distance_per_kg_m).toBe(3.1);
+    expect(comparison.scenarios[3]?.distance_per_kg_m).toBe(3.9);
+    // v4 observed service anchor rides beside cost (§6).
+    expect(comparison.observed_service_anchor.basis).toBe("observed_emptying_records");
+    expect(comparison.observed_service_anchor.share_full_or_overfull_pct).toBe(26.9);
     // Gains, incl. the honestly-negative selection gain.
     expect(comparison.gains.selection_gain_m).toBe(-72398);
     expect(comparison.gains.total_gain_m).toBe(384448);

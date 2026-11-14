@@ -102,7 +102,7 @@ export interface PolicyConfigOverride {
 export type TravelTimeMode = "fixed_per_leg" | "haversine_derived";
 
 /** §4.6 v3 / §5.2 per-field source label for the config assumptions panel. */
-export type ConfigSourceLabel = "representative" | "demo assumption";
+export type ConfigSourceLabel = "representative" | "demo assumption" | "literature";
 
 /**
  * `routing_config` override (§5.2 RouteRequest v3, single demo vehicle type).
@@ -127,6 +127,8 @@ export interface RoutingConfigOverride {
   operating_days_per_year?: number;
   geography_seed?: number;
   geography_spread_km?: number;
+  containers_per_series?: number;
+  frequency_days?: number;
   avg_speed_kmh?: number;
   detour_factor?: number;
   solver_solution_limit?: number;
@@ -151,6 +153,10 @@ export interface RoutingConfigDefaults {
   operating_days_per_year: number;
   geography_seed: number;
   geography_spread_km: number;
+  /** §4.2/§4.6 v4 [demo assumption — Q11]: containers per series (litres/service multiplier). */
+  containers_per_series: number;
+  /** §4.7/§5.2.4 v4 [demo assumption — Q10]: fixed-frequency cycle length in days. */
+  frequency_days: number;
   avg_speed_kmh: number;
   detour_factor: number;
   solver_solution_limit: number;
@@ -169,16 +175,36 @@ export interface ConfigDefaults {
   routing: RoutingConfigDefaults;
   assumption_fields: string[];
   sources: Record<string, ConfigSourceLabel>;
+  /**
+   * v4: verbatim per-field source labels from the API — distinguishes
+   * [representative] / [literature] / [demo assumption] (§6). Optional so the
+   * UI fails safe on older payloads (label all as [demo assumption]).
+   */
+  source_labels?: Record<string, string>;
 }
 
 /**
- * Fail-safe source lookup for the UI: only "representative" counts as such;
- * anything else (missing map, missing field, typo) degrades to
+ * Fail-safe VERBATIM source label for the UI assumptions panel (§5.3/§6):
+ * prefer the API's verbatim `source_labels` string (e.g. the [literature]
+ * density citation); anything missing/malformed degrades to
+ * "[demo assumption]" — never silently upgrades a value to a fact.
+ */
+export function sourceLabelVerbatim(
+  config: ConfigDefaults | null,
+  field: string,
+): string {
+  const raw = config?.source_labels?.[field];
+  return typeof raw === "string" && raw !== "" ? raw : "[demo assumption]";
+}
+
+/**
+ * Fail-safe source lookup for the UI: only "representative"/"literature"
+ * count as such; anything else (missing map, missing field, typo) degrades to
  * "demo assumption" (§5.3 — never silently relabel values as facts).
  */
 export function sourceLabel(config: ConfigDefaults | null, field: string): ConfigSourceLabel {
   const raw = config?.sources?.[field];
-  return raw === "representative" ? "representative" : "demo assumption";
+  return raw === "representative" || raw === "literature" ? raw : "demo assumption";
 }
 
 /** §5.2 ForecastRequest (horizon_days optional, default 28 [demo assumption]) */
@@ -369,13 +395,18 @@ export interface RouteResponse {
 }
 
 /**
- * §5.2.2 ComparisonScenario (v2 2026-11-14) — one comparison scenario
- * (`naive_sweep_all` / `naive_sweep_selected` / `ortools`). Per-stop/per-kg
- * metrics are `null` on zero denominators (e.g. fleet exhausted before any
- * stop) — never render a fabricated 0. The `ortools` scenario's distance/
- * duration/per-metric values are medians across `runs` solves (§4.7).
+ * §5.2.2 ComparisonScenario (v4 2026-11-14) — one comparison scenario.
+ * v4 adds the status quo `naive_fixed_frequency` to the array (§4.7), FIRST
+ * in fixed order. Per-stop/per-kg metrics are `null` on zero denominators
+ * (e.g. fleet exhausted before any stop) — never render a fabricated 0. The
+ * `ortools` scenario's distance/duration/per-metric values are medians across
+ * `runs` solves (§4.7).
  */
-export type ComparisonMethod = "naive_sweep_all" | "naive_sweep_selected" | "ortools";
+export type ComparisonMethod =
+  | "naive_fixed_frequency"
+  | "naive_sweep_all"
+  | "naive_sweep_selected"
+  | "ortools";
 
 export interface ComparisonScenario {
   method: ComparisonMethod;
@@ -425,12 +456,22 @@ export interface FleetBudget {
   cost_eur_per_year: number;
 }
 
+/** §5.2.2/§4.7 v4 observed service anchor — status-quo service level from
+ * the observed emptying records (§1.5); rendered beside every cost (§6). */
+export interface ObservedServiceAnchor {
+  basis: "observed_emptying_records";
+  share_full_or_overfull_pct: number | null;
+  max_fill_pct: number | null;
+}
+
 /**
- * §5.2.2 ComparisonResponse (v2 scenarios + v3 cost/fleet_budget). Echoes
+ * §5.2.2 ComparisonResponse (v4 scenarios + v3 cost/fleet_budget). Echoes
  * fixed CLI defaults (as_of/target/horizon, method "persistence"). `scenarios`
- * is in the fixed §4.7 order (`naive_sweep_all`, `naive_sweep_selected`,
- * `ortools`). `distance_provenance` is `haversine_straight_line_derived` —
- * never present as road distance.
+ * is in the fixed §4.7 v4 order: `naive_fixed_frequency` FIRST (status quo),
+ * then `naive_sweep_all`, `naive_sweep_selected`, `ortools` — 4 entries.
+ * `observed_service_anchor` is the service level shown beside cost (§6).
+ * `distance_provenance` is `haversine_straight_line_derived` — never
+ * presented as road distance.
  */
 export interface ComparisonResponse {
   as_of_date: string;
@@ -441,31 +482,48 @@ export interface ComparisonResponse {
   gains: ComparisonGains;
   optimised_determinism: OptimisedDeterminism;
   fleet_budget: FleetBudget;
+  observed_service_anchor: ObservedServiceAnchor;
   distance_provenance: DistanceProvenance;
   assumptions: string[];
 }
 
 /**
- * §5.2.3 Days-to-full (v3): [predicted] per-series estimate from fill history
- * only. `days_to_full` is null exactly when `reason` is set and is not
- * `already_full` (which keeps `days_to_full = 0.0` — a state fact).
+ * §5.2.3 Days-to-full (v2, 2026-11-14; §1.5 semantics) — [predicted]
+ * per-series estimate from emptying records only. `days_to_full` is null
+ * exactly when `reason` is set (never a fabricated value).
+ * Reasons (§5.2.3): not_enough_records (< 2 records), zero_interval_only,
+ * no_numeric_fill, zero_rate.
  */
-export type DaysToFullReason = "no_numeric_history" | "no_positive_rate" | "already_full";
+export type DaysToFullReason =
+  | "not_enough_records"
+  | "zero_interval_only"
+  | "no_numeric_fill"
+  | "zero_rate";
 
 export interface DaysToFullSeries {
   location_id: string;
   material_type: MaterialType;
-  last_date: string;
+  /** Latest record date of the series (null iff the series has no records). */
+  last_emptying_date: string | null;
   last_fill_pct: number | null;
   last_is_overfull: boolean;
-  /** Median positive consecutive-pair rate (percent per day). */
+  /** §1.5 rate: median over records of fill_at_emptying / interval_days (pp/day). */
   rate_pct_per_day: number | null;
-  /** max(0, (100 − last numeric fill) / rate), 1 d.p. */
+  /** Median over intervals > 0 (days). */
+  median_interval_days: number | null;
+  /** target_pct / rate, 1 d.p.; null iff `reason` is set. */
   days_to_full: number | null;
+  /** last_emptying_date + round(days_to_full); may be in the past ("overdue"), never clamped. */
+  predicted_full_date: string | null;
+  /** Any contributing record was numeric >= 100 or overfull — censored lower bound (§1.5). */
+  is_lower_bound: boolean;
   reason: DaysToFullReason | null;
 }
 
-/** Aggregate stats cover series with an estimate only; nulls when none exist. */
+/**
+ * Aggregate stats cover series with an estimate only; nulls when none exist.
+ * `lower_bound_share_pct`: % of estimates flagged is_lower_bound, 1 d.p.
+ */
 export interface DaysToFullStats {
   series_total: number;
   series_with_estimate: number;
@@ -473,13 +531,17 @@ export interface DaysToFullStats {
   mean_days: number | null;
   min_days: number | null;
   max_days: number | null;
+  lower_bound_share_pct: number | null;
 }
 
+/** §5.2.3 DaysToFullResponse (v2). target_pct default 90 [demo assumption]. */
 export interface DaysToFullResponse {
-  method: "median_positive_pair_rate";
+  method: "fill_at_emptying_rate";
+  target_pct: number;
   stats: DaysToFullStats;
+  stats_by_material: Record<MaterialType, DaysToFullStats>;
   series: DaysToFullSeries[];
-  /** Caveats echoed by the API (median reading gap, constant-rate assumption). */
+  /** Mandatory §1.5 caveat + labelled model assumptions echoed by the API. */
   assumptions: string[];
 }
 
@@ -611,4 +673,128 @@ export async function fetchDaysToFull(): Promise<DaysToFullResponse> {
  */
 export async function loadDemoDataset(): Promise<UploadResponse> {
   return request<UploadResponse>("/api/datasets/demo", { method: "POST" });
+}
+
+/* --- §5.2.4 scenario engine + §5.2.5 simulation (v4) ------------------------ */
+
+/** §5.2.4 ScenarioRequest — all optional; omitted fields use server defaults. */
+export interface ScenarioRequest {
+  /** Fixed-frequency cycle length (default 28 [demo assumption — Q10]). */
+  frequency_days?: number;
+  /** Replay window length (default: observed window length). */
+  simulation_days?: number;
+  policy_config?: PolicyConfigOverride;
+  routing_config?: RoutingConfigOverride;
+}
+
+/** §5.2.4 simulated service block — always rendered beside cost (§6). */
+export interface ScenarioServiceBlock {
+  basis: "simulated";
+  /** % container-days with fill > 100 (null iff no active series — never fabricated). */
+  overflow_share_pct: number | null;
+  share_emptyings_full_or_overfull_pct: number | null;
+  max_fill_pct: number | null;
+}
+
+/** A series excluded from the replay with its reason — never silently dropped. */
+export interface SkippedSeries {
+  location_id: string;
+  material_type: MaterialType;
+  reason: string;
+}
+
+/** §5.2.4 one strategy's cost + service aggregates ([predicted] derivations). */
+export interface ScenarioStrategy {
+  id: "fixed_frequency" | "demand_driven";
+  truck_days: number;
+  stops_total: number;
+  cost_eur_total: number;
+  cost_eur_per_year: number;
+  service: ScenarioServiceBlock;
+}
+
+/** §5.3 effective-config echo for scenarios/simulation. */
+export interface SimulationConfigEcho {
+  frequency_days: number;
+  simulation_days: number;
+  select_threshold_pct: number;
+  container_volume_litres: number;
+  containers_per_series: number;
+  service_minutes_per_stop: number;
+  fixed_travel_minutes: number;
+  disposal_service_minutes: number;
+  max_shift_minutes: number;
+  volume_capacity_litres: number;
+  weight_capacity_kg: number;
+  density_kg_per_litre: number;
+  cost_per_truck_day_eur: number;
+  operating_days_per_year: number;
+  travel_time_mode: TravelTimeMode;
+}
+
+/** §5.2.4 ScenarioResponse — cost AND service always reported together. */
+export interface ScenarioResponse {
+  strategies: ScenarioStrategy[];
+  skipped_series: SkippedSeries[];
+  observed_anchor: ObservedServiceAnchor;
+  config_echo: SimulationConfigEcho;
+  assumptions: string[];
+}
+
+/** §5.2.5 one replayed day. */
+export interface SimulationDay {
+  date: string;
+  collections: number;
+  overflow_containers: number;
+  truck_days: number;
+  cumulative_cost_eur: number;
+}
+
+/** §5.2.5 data-basis vocabulary (§6; EN/DE wording in the UI layer). */
+export interface SimulationDataBasis {
+  records: "observed";
+  rates: "derived";
+  plan: "simulated";
+}
+
+/** §5.2.5 calibration sanity pair (TechDetails); either side nullable. */
+export interface Calibration {
+  simulated_fill_at_emptying_median_pct: number | null;
+  observed_fill_at_emptying_median_pct: number | null;
+}
+
+/** §5.2.5 SimulationResponse — deterministic daily replay, no OR-Tools per day. */
+export interface SimulationResponse {
+  start_date: string;
+  end_date: string;
+  data_basis: SimulationDataBasis;
+  strategies: Array<{ id: "fixed_frequency" | "demand_driven"; days: SimulationDay[] }>;
+  calibration: Calibration;
+  skipped_series: SkippedSeries[];
+  config_echo: SimulationConfigEcho;
+  assumptions: string[];
+}
+
+/**
+ * POST /api/scenarios (§5.2.4 v4): planning-lever what-if; cost AND service
+ * level always reported together (§6). 404 when no dataset is loaded (§5.3).
+ */
+export async function runScenarios(payload: ScenarioRequest): Promise<ScenarioResponse> {
+  return request<ScenarioResponse>("/api/scenarios", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * POST /api/simulation (§5.2.5 v4): multi-month daily replay for the timeline
+ * visual; same parameters as §5.2.4. 404 when no dataset is loaded (§5.3).
+ */
+export async function runSimulation(payload: ScenarioRequest): Promise<SimulationResponse> {
+  return request<SimulationResponse>("/api/simulation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

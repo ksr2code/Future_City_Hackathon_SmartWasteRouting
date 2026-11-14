@@ -44,6 +44,14 @@ export function setInputValue(input: Element, value: string): void {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+/** Set a controlled <select> value via the native setter so React onChange fires. */
+export function setSelectValue(select: Element, value: string): void {
+  if (!(select instanceof HTMLSelectElement)) throw new TypeError("not a select");
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  setter?.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 export function cleanup(): void {
   act(() => {
     for (const root of roots.splice(0)) {

@@ -9,8 +9,10 @@ import type {
   DaysToFullResponse,
   DatasetSummary,
   RouteResponse,
+  ScenarioResponse,
   SelectionResponse,
   SeriesStatus,
+  SimulationResponse,
 } from "../lib/api";
 
 export const summaryFixture: DatasetSummary = {
@@ -183,6 +185,8 @@ export const configFixture: ConfigDefaults = {
     operating_days_per_year: 200,
     geography_seed: 0,
     geography_spread_km: 6.0,
+    containers_per_series: 1, // §4.6 v4 [demo assumption — Q11]
+    frequency_days: 28, // §4.7 v4 [demo assumption — Q10]
     avg_speed_kmh: 30,
     detour_factor: 1.4,
     solver_solution_limit: 200,
@@ -200,7 +204,7 @@ export const configFixture: ConfigDefaults = {
     uncertainty_buffer_pct: "demo assumption",
     overfull_always_selected: "demo assumption",
     container_volume_litres: "representative",
-    densities_kg_per_litre: "demo assumption",
+    densities_kg_per_litre: "literature",
     vehicle_volume_capacity_litres: "demo assumption",
     vehicle_weight_capacity_kg: "demo assumption",
     vehicle_count_available: "demo assumption",
@@ -215,25 +219,38 @@ export const configFixture: ConfigDefaults = {
     operating_days_per_year: "representative",
     geography_seed: "demo assumption",
     geography_spread_km: "demo assumption",
+    containers_per_series: "demo assumption",
+    frequency_days: "demo assumption",
     avg_speed_kmh: "demo assumption",
     detour_factor: "demo assumption",
     solver_solution_limit: "demo assumption",
     solver_time_limit_s: "demo assumption",
     horizon_days: "demo assumption",
   },
+  // v4 verbatim labels (real capture v4/config.json shape): [representative] /
+  // [literature] / [demo assumption] stay distinguishable in the UI (§6).
+  source_labels: {
+    container_volume_litres: "[representative]",
+    densities_kg_per_litre:
+      "[literature] German AVV table AVV 20 01 02 (entsorgen-versorgen.de, retrieved 2026-11-14)",
+    cost_per_truck_day_eur: "[representative]",
+    frequency_days: "[demo assumption]",
+    containers_per_series: "[demo assumption]",
+  },
 };
 
 /**
- * §5.2.2 ComparisonResponse (v2 scenarios + v3 cost fields) — synthetic
- * fixture mirroring the real 2026-11-14 live capture (frontend/src/test/
- * fixtures/real-capture/comparison.json, regenerated for v3): scenarios in
- * the fixed §4.7 order, nullable per-metrics, gains incl. the honestly-
- * negative selection gain, determinism "identical", per-scenario cost block
- * and the fleet budget. Distances are straight-line derived, never road
- * distance.
+ * §5.2.2 ComparisonResponse (v4 scenarios + v3 cost fields) — mirrors the
+ * verbatim real capture (frontend/src/test/fixtures/real-capture/v4/
+ * comparison.json, 2026-11-14): 4-scenario array with `naive_fixed_frequency`
+ * FIRST (§4.7 status quo), then sweep_all / sweep_selected / ortools;
+ * nullable per-metrics; honestly-negative selection gain; determinism
+ * "identical"; per-scenario cost block; fleet budget; v4
+ * `observed_service_anchor` beside cost. Distances are straight-line
+ * derived, never road distance.
  */
 function scenario(
-  method: "naive_sweep_all" | "naive_sweep_selected" | "ortools",
+  method: ComparisonScenario["method"],
   values: {
     status: string;
     distance_m: number;
@@ -266,6 +283,20 @@ export const comparisonFixture: ComparisonResponse = {
   horizon_days: 28,
   method: "persistence",
   scenarios: [
+    scenario("naive_fixed_frequency", {
+      status: "incomplete",
+      distance_m: 355474,
+      duration_min: 1410,
+      stops_served: 60,
+      stops_total: 637,
+      collected_volume_litres: 84900,
+      collected_weight_kg: 33960,
+      unserved_count: 577,
+      recommended_trucks: 183,
+      fleet_basis: { ceil_by_volume: 183, ceil_by_weight: 88 },
+      distance_per_stop_m: 5924.6,
+      distance_per_kg_m: 10.5,
+    }),
     scenario("naive_sweep_all", {
       status: "incomplete",
       distance_m: 454623,
@@ -273,12 +304,12 @@ export const comparisonFixture: ComparisonResponse = {
       stops_served: 50,
       stops_total: 1338,
       collected_volume_litres: 90300,
-      collected_weight_kg: 45150,
+      collected_weight_kg: 36120,
       unserved_count: 1288,
       recommended_trucks: 183,
-      fleet_basis: { ceil_by_volume: 183, ceil_by_weight: 110 },
+      fleet_basis: { ceil_by_volume: 183, ceil_by_weight: 88 },
       distance_per_stop_m: 9092.5,
-      distance_per_kg_m: 10.1,
+      distance_per_kg_m: 12.6,
     }),
     scenario("naive_sweep_selected", {
       status: "incomplete",
@@ -287,12 +318,12 @@ export const comparisonFixture: ComparisonResponse = {
       stops_served: 38,
       stops_total: 458,
       collected_volume_litres: 99900,
-      collected_weight_kg: 49950,
+      collected_weight_kg: 39960,
       unserved_count: 420,
       recommended_trucks: 99,
-      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 60 },
+      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 48 },
       distance_per_stop_m: 13869.0,
-      distance_per_kg_m: 10.6,
+      distance_per_kg_m: 13.2,
     }),
     scenario("ortools", {
       status: "feasible",
@@ -301,12 +332,12 @@ export const comparisonFixture: ComparisonResponse = {
       stops_served: 34,
       stops_total: 458,
       collected_volume_litres: 45000,
-      collected_weight_kg: 22500,
+      collected_weight_kg: 18000,
       unserved_count: 424,
       recommended_trucks: 99,
-      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 60 },
+      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 48 },
       distance_per_stop_m: 2064.0,
-      distance_per_kg_m: 3.1,
+      distance_per_kg_m: 3.9,
     }),
   ],
   gains: {
@@ -326,6 +357,11 @@ export const comparisonFixture: ComparisonResponse = {
     trucks: 99,
     cost_eur_per_day: 49500,
     cost_eur_per_year: 9900000,
+  },
+  observed_service_anchor: {
+    basis: "observed_emptying_records",
+    share_full_or_overfull_pct: 26.9,
+    max_fill_pct: 100.0,
   },
   distance_provenance: "haversine_straight_line_derived",
   assumptions: [
@@ -350,35 +386,233 @@ export const comparisonMedianOfRunsFixture: ComparisonResponse = {
 };
 
 /**
- * §5.2.3 DaysToFullResponse (v3) — synthetic fixture mirroring the observed
- * real-CSV run (docs/PROGRESS.md M15: median 48.3 d, 1,213/1,338 series).
- * All values [predicted] from fill history; caveats are the API's own
- * labelled assumption strings.
+ * §5.2.3 DaysToFullResponse (v2, §1.5 semantics) — synthetic fixture
+ * mirroring the verbatim real capture (frontend/src/test/fixtures/
+ * real-capture/v4/days_to_full.json, 2026-11-14: real-CSV run
+ * 1,303/1,338 series, median 59.3 d, target 90). All values [predicted]
+ * from emptying records only; caveats are the API's own labelled
+ * assumption strings (incl. the mandatory §1.5 caveat).
  */
 export const daysToFullFixture: DaysToFullResponse = {
-  method: "median_positive_pair_rate",
+  method: "fill_at_emptying_rate",
+  target_pct: 90,
   stats: {
     series_total: 1338,
-    series_with_estimate: 1213,
-    median_days: 48.3,
-    mean_days: 113.0,
-    min_days: 0,
-    max_days: 2120,
+    series_with_estimate: 1303,
+    median_days: 59.3,
+    mean_days: 101.7,
+    min_days: 6.6,
+    max_days: 2313.0,
+    lower_bound_share_pct: 66.5,
+  },
+  stats_by_material: {
+    brown: {
+      series_total: 442,
+      series_with_estimate: 422,
+      median_days: 121.9,
+      mean_days: 186.9,
+      min_days: 22.5,
+      max_days: 2313.0,
+      lower_bound_share_pct: 36.3,
+    },
+    green: {
+      series_total: 448,
+      series_with_estimate: 439,
+      median_days: 52.0,
+      mean_days: 71.7,
+      min_days: 10.2,
+      max_days: 2079.0,
+      lower_bound_share_pct: 73.6,
+    },
+    white: {
+      series_total: 448,
+      series_with_estimate: 442,
+      median_days: 38.1,
+      mean_days: 50.1,
+      min_days: 6.6,
+      max_days: 380.2,
+      lower_bound_share_pct: 88.5,
+    },
   },
   series: [
     {
       location_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       material_type: "brown",
-      last_date: "2026-09-30",
-      last_fill_pct: 60,
+      last_emptying_date: "2026-09-10",
+      last_fill_pct: 20,
       last_is_overfull: false,
-      rate_pct_per_day: 0.83,
-      days_to_full: 48.2,
+      rate_pct_per_day: 2.083333,
+      median_interval_days: 34.0,
+      days_to_full: 43.2,
+      predicted_full_date: "2026-10-23",
+      is_lower_bound: true,
       reason: null,
+    },
+    {
+      location_id: "11111111-2222-3333-4444-555555555555",
+      material_type: "white",
+      last_emptying_date: "2026-09-21",
+      last_fill_pct: null,
+      last_is_overfull: true,
+      rate_pct_per_day: null,
+      median_interval_days: 28.0,
+      days_to_full: null,
+      predicted_full_date: null,
+      is_lower_bound: true,
+      reason: "no_numeric_fill",
     },
   ],
   assumptions: [
-    "[observed] median reading gap 28 d",
-    "[predicted] constant fill rate assumed between readings; decreasing readings (probable emptying events) are excluded from the rate — the data has no collection events",
+    "fill at emptying shows how full the container was when the schedule reached it — not how fast it would have filled [representative-stated §1.5]",
+    "rates additionally assume no unobserved emptying between records [assumption]",
+    "days_to_full assumes the container refills from 0 after each emptying [model assumption]",
+    "target fill 90% [demo assumption — slide mockup]",
+  ],
+};
+
+/**
+ * §5.2.4 ScenarioResponse (v4) — mirrors the verbatim real capture
+ * (frontend/src/test/fixtures/real-capture/v4/scenarios.json): cost AND
+ * service always together (§6); demand_driven honestly costs MORE than
+ * fixed_frequency while its service is better (max fill 80.0 = threshold).
+ */
+export const scenariosFixture: ScenarioResponse = {
+  strategies: [
+    {
+      id: "fixed_frequency",
+      truck_days: 852,
+      stops_total: 15636,
+      cost_eur_total: 426000.0,
+      cost_eur_per_year: 244126.07,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 2.4,
+        share_emptyings_full_or_overfull_pct: 14.4,
+        max_fill_pct: 366.4,
+      },
+    },
+    {
+      id: "demand_driven",
+      truck_days: 1040,
+      stops_total: 9993,
+      cost_eur_total: 520000.0,
+      cost_eur_per_year: 297994.27,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 0.0,
+        share_emptyings_full_or_overfull_pct: 0.0,
+        max_fill_pct: 80.0,
+      },
+    },
+  ],
+  skipped_series: [
+    {
+      location_id: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+      material_type: "brown",
+      reason: "not_enough_records",
+    },
+  ],
+  observed_anchor: {
+    basis: "observed_emptying_records",
+    share_full_or_overfull_pct: 26.9,
+    max_fill_pct: 100.0,
+  },
+  config_echo: {
+    frequency_days: 28,
+    simulation_days: 349,
+    select_threshold_pct: 80.0,
+    container_volume_litres: 3000,
+    containers_per_series: 1,
+    service_minutes_per_stop: 5,
+    fixed_travel_minutes: 10,
+    disposal_service_minutes: 30,
+    max_shift_minutes: 480,
+    volume_capacity_litres: 12000,
+    weight_capacity_kg: 10000,
+    density_kg_per_litre: 0.4,
+    cost_per_truck_day_eur: 500.0,
+    operating_days_per_year: 200,
+    travel_time_mode: "fixed_per_leg",
+  },
+  assumptions: [
+    "simulation based on historical rates, not a prediction of reality",
+    "[demo assumption] frequency_days=28 (fixed-collection-cycle length, §4.7/§5.2.4; real schedule unknown [Q10])",
+  ],
+};
+
+/**
+ * §5.2.5 SimulationResponse (v4) — small synthetic fixture mirroring the
+ * verbatim real capture (frontend/src/test/fixtures/real-capture/v4/
+ * simulation.json): daily replay, data_basis vocabulary, calibration pair.
+ * The first days show the model consequence of the replay initialisation:
+ * series without pre-window history start at 0 on the same day and
+ * synchronise onto a few "mega-days" (labelled in the UI, §6).
+ */
+export const simulationFixture: SimulationResponse = {
+  start_date: "2025-10-17",
+  end_date: "2026-09-30",
+  data_basis: { records: "observed", rates: "derived", plan: "simulated" },
+  strategies: [
+    {
+      id: "fixed_frequency",
+      days: [
+        {
+          date: "2025-10-17",
+          collections: 0,
+          overflow_containers: 0,
+          truck_days: 0,
+          cumulative_cost_eur: 0.0,
+        },
+        {
+          date: "2025-11-14",
+          collections: 1303,
+          overflow_containers: 12,
+          truck_days: 852,
+          cumulative_cost_eur: 426000.0,
+        },
+        {
+          date: "2026-09-30",
+          collections: 0,
+          overflow_containers: 0,
+          truck_days: 0,
+          cumulative_cost_eur: 426000.0,
+        },
+      ],
+    },
+    {
+      id: "demand_driven",
+      days: [
+        {
+          date: "2025-10-17",
+          collections: 0,
+          overflow_containers: 0,
+          truck_days: 0,
+          cumulative_cost_eur: 0.0,
+        },
+        {
+          date: "2025-12-05",
+          collections: 640,
+          overflow_containers: 0,
+          truck_days: 400,
+          cumulative_cost_eur: 200000.0,
+        },
+      ],
+    },
+  ],
+  calibration: {
+    simulated_fill_at_emptying_median_pct: 42.5,
+    observed_fill_at_emptying_median_pct: 60.0,
+  },
+  skipped_series: [
+    {
+      location_id: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+      material_type: "brown",
+      reason: "not_enough_records",
+    },
+  ],
+  config_echo: scenariosFixture.config_echo,
+  assumptions: [
+    "simulation based on historical rates, not a prediction of reality",
+    "per-series fill model: rate_pct_per_day x days since last emptying (container refills from 0 after each emptying; §5.2.3/§5.2.5)",
   ],
 };

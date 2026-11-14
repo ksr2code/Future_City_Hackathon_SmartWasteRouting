@@ -54,7 +54,7 @@ export function ContainerList({ datasetVersion }: { datasetVersion: number }) {
   return (
     <Panel
       title="3 · Containers (observed last readings)"
-      subtitle="What this shows: the last sensor reading per (location, material) series. Why it matters: overfull containers should be collected first — fill is % of container volume; overfull is its own state, never 100 %."
+      subtitle="What this shows: the last emptying record per (location, material) series. Why it matters: overfull containers should be collected first — fill is % of container volume; overfull is its own state, never 100 %."
       testid="containers-panel"
     >
       {loading ? <LoadingState label="Loading containers" /> : null}

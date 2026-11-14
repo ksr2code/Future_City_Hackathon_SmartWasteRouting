@@ -14,22 +14,25 @@ import { t, type Lang, type TranslationKey } from "./lib/i18n";
 import { CandidatesPanel } from "./components/CandidatesPanel";
 import { ConfigEditor } from "./components/ConfigEditor";
 import { ContainerList } from "./components/ContainerList";
+import { ContainersIntervalPanel } from "./components/ContainersIntervalPanel";
 import { KpiOverview } from "./components/KpiOverview";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { Overview } from "./components/Overview";
 import { RoutePanel } from "./components/RoutePanel";
+import { ScenariosPanel } from "./components/ScenariosPanel";
 import { SyntheticDataBanner } from "./components/SyntheticDataBanner";
 import { UploadPanel } from "./components/UploadPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 /**
- * Operator dashboard (M11 + jury-usability pass). Tab navigation with the
+ * Operator dashboard (M11 + jury-usability pass; M16 v4 adds the Scenarios
+ * tab and the per-container interval view). Tab navigation with the
  * plain-language Overview first; ALL panels stay mounted (hidden via the
  * `hidden` attribute) so state is kept and cross-panel flows keep working.
  * Demo geography/values are always visibly labelled; observed vs predicted vs
  * [demo assumption] is never mixed.
  */
-type TabId = "overview" | "data" | "containers" | "forecast" | "route" | "config";
+type TabId = "overview" | "data" | "containers" | "forecast" | "route" | "scenarios" | "config";
 
 const TABS: ReadonlyArray<{ id: TabId; labelKey: TranslationKey; testid: string }> = [
   { id: "overview", labelKey: "nav.overview", testid: "nav-overview" },
@@ -37,6 +40,7 @@ const TABS: ReadonlyArray<{ id: TabId; labelKey: TranslationKey; testid: string 
   { id: "containers", labelKey: "nav.containers", testid: "nav-containers" },
   { id: "forecast", labelKey: "nav.forecast", testid: "nav-forecast" },
   { id: "route", labelKey: "nav.route", testid: "nav-route" },
+  { id: "scenarios", labelKey: "nav.scenarios", testid: "nav-scenarios" },
   { id: "config", labelKey: "nav.config", testid: "nav-config" },
 ];
 
@@ -222,9 +226,12 @@ export default function App() {
           </ErrorBoundary>
         </div>
 
-        <div hidden={activeTab !== "containers"}>
+        <div hidden={activeTab !== "containers"} className="space-y-4">
           <ErrorBoundary label="Containers">
             <ContainerList datasetVersion={datasetVersion} />
+          </ErrorBoundary>
+          <ErrorBoundary label="Container intervals">
+            <ContainersIntervalPanel lang={lang} datasetVersion={datasetVersion} />
           </ErrorBoundary>
         </div>
 
@@ -244,6 +251,18 @@ export default function App() {
               policyOverride={policyOverride}
               routingOverride={routingOverride}
               onRoute={handleRoute}
+            />
+          </ErrorBoundary>
+        </div>
+
+        <div hidden={activeTab !== "scenarios"}>
+          <ErrorBoundary label="Scenarios">
+            <ScenariosPanel
+              lang={lang}
+              config={config}
+              configLoading={configLoading}
+              datasetVersion={datasetVersion}
+              recalculateKey={recalculateKey}
             />
           </ErrorBoundary>
         </div>
