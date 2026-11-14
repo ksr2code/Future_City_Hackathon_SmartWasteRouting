@@ -1,28 +1,32 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ConfigEditor } from "./ConfigEditor";
-import type { PolicyConfigOverride, RoutingConfigOverride } from "../lib/api";
+import type { ConfigDefaults, PolicyConfigOverride, RoutingConfigOverride } from "../lib/api";
 import { click, cleanup, flush, render, setInputValue } from "../test/dom";
 import { configFixture } from "../test/fixtures";
 
 function renderEditor(handlers?: {
   onPolicy?: (override: PolicyConfigOverride) => void;
   onRouting?: (override: RoutingConfigOverride) => void;
+  onRecalculate?: () => void;
 }) {
   const onPolicyChange: Mock = handlers?.onPolicy ? vi.fn(handlers.onPolicy) : vi.fn();
   const onRoutingChange: Mock = handlers?.onRouting ? vi.fn(handlers.onRouting) : vi.fn();
+  const onRecalculate: Mock = handlers?.onRecalculate ? vi.fn(handlers.onRecalculate) : vi.fn();
   render(
     <ConfigEditor
       config={configFixture}
+      lang="en"
       loading={false}
       error={null}
       policyOverride={{}}
       routingOverride={{}}
       onPolicyChange={onPolicyChange}
       onRoutingChange={onRoutingChange}
+      onRecalculate={onRecalculate}
     />,
   );
-  return { onPolicyChange, onRoutingChange };
+  return { onPolicyChange, onRoutingChange, onRecalculate };
 }
 
 afterEach(() => {
@@ -30,17 +34,23 @@ afterEach(() => {
 });
 
 describe("ConfigEditor", () => {
-  it("renders policy and routing fields with defaults and [demo assumption] tags", () => {
+  it("renders policy and routing fields with defaults and per-field source tags", () => {
     renderEditor();
 
     expect(document.querySelector('[data-testid="config-select_threshold_pct"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="config-container_volume_litres"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="config-vehicle_count_available"]')).not.toBeNull();
-    // Defaults from GET /api/config shown next to inputs.
+    // Defaults from GET /api/config shown next to inputs (v3 values).
     expect(document.body.textContent).toContain("default: 80 %");
-    expect(document.body.textContent).toContain("default: 1,900 L");
-    // Tag counts match assumption_fields (5 listed → 5 tags).
-    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBe(5);
+    expect(document.body.textContent).toContain("default: 3,000 L");
+    // v3 source tags: 19 [demo assumption] + 8 [representative] — never mixed.
+    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBe(19);
+    expect(document.querySelectorAll('[data-testid="representative-tag"]').length).toBe(8);
+    // Highlighted key-parameter group + v3 fields exist.
+    expect(document.querySelector('[data-testid="config-travel_time_mode"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="config-cost_per_truck_day_eur"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="config-geography_seed"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Key parameters");
   });
 
   it("keeps the [demo assumption] label visible after editing a value", async () => {
@@ -98,18 +108,35 @@ describe("ConfigEditor", () => {
     expect((input as HTMLInputElement).value).toBe("");
   });
 
-  it("falls back to tagging all fields when assumption_fields is missing", () => {
+  it("fails safe: a missing sources map labels every field [demo assumption]", () => {
     render(
       <ConfigEditor
-        config={{ ...configFixture, assumption_fields: [] }}
+        config={{ ...configFixture, sources: {} } as unknown as ConfigDefaults}
         loading={false}
         error={null}
+        lang="en"
         policyOverride={{}}
         routingOverride={{}}
         onPolicyChange={vi.fn()}
         onRoutingChange={vi.fn()}
       />,
     );
-    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBeGreaterThan(10);
+    // All 27 rendered field rows (3 policy + 1 travel mode + 13 key + 10 other)
+    // degrade to [demo assumption] — never silently upgraded to facts (§5.3).
+    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBe(27);
+    expect(document.querySelectorAll('[data-testid="representative-tag"]').length).toBe(0);
+  });
+
+  it("Recalculate button re-runs the auto-computed views via onRecalculate", async () => {
+    const { onRecalculate } = renderEditor({
+      onRecalculate: () => {},
+    });
+
+    await click(document.querySelector('[data-testid="config-recalculate"]'));
+    await flush();
+
+    expect(onRecalculate).toHaveBeenCalledTimes(1);
+    // Reset still present alongside Recalculate.
+    expect(document.querySelector('[data-testid="config-reset"]')).not.toBeNull();
   });
 });

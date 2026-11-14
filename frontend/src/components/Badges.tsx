@@ -55,6 +55,22 @@ export function AssumptionTag({ text = "demo assumption" }: { text?: string }) {
   );
 }
 
+/**
+ * [representative] tag (§4.6 v3): the value came from the challenge
+ * representative (verbal), not from data — visually distinct from the amber
+ * [demo assumption] tag, still clearly NOT an observed fact (§5.3).
+ */
+export function RepresentativeTag() {
+  return (
+    <span
+      className="inline-block rounded border border-sky-400 bg-sky-50 px-1.5 py-0.5 text-xs font-medium text-sky-800"
+      data-testid="representative-tag"
+    >
+      [representative]
+    </span>
+  );
+}
+
 const MATERIAL_SWATCH: Record<MaterialType, string> = {
   brown: "bg-amber-800",
   green: "bg-emerald-600",

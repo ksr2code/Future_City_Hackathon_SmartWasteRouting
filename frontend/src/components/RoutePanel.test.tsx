@@ -52,19 +52,31 @@ describe("RoutePanel", () => {
     expect(document.body.textContent).toContain("1,200 L / 600 kg");
     expect(document.body.textContent).toContain("NOT road distance");
 
+    // v3 cost block + per-material volumes (fixture: 1 truck, brown only).
+    const cost = document.querySelector('[data-testid="route-cost"]')?.textContent ?? "";
+    expect(cost).toContain("1 vehicle(s)");
+    expect(cost).toContain("500 EUR/day · 100,000 EUR/year");
+    expect(cost).toContain("not invoiced");
+    const volumes = document.querySelector('[data-testid="route-volumes-by-material"]')?.textContent ?? "";
+    expect(volumes).toContain("1,200 L");
+    expect(document.querySelector('[data-testid="route-travel-time-mode"]')?.textContent).toContain(
+      "fixed_per_leg",
+    );
+
     // Assumptions surfaced to the parent for the synthetic-data banner (§5.3).
     expect(onRoute).toHaveBeenCalledWith(routeResponseFixture);
     expect((onRoute.mock.calls[0]?.[0] as RouteResponse).assumptions.length).toBe(2);
   });
 
   /**
-   * Regression (review 2026-11-14): renders the VERBATIM real backend route
-   * response (POST /api/route, real CSV upload, as_of 2026-09-30). Real wire
-   * shapes: FLAT unserved {location_id, material_type, reason} (no stop_key)
-   * and load_progression as [volume, weight] TUPLE arrays. The old mocked
-   * fixtures used the wrong shapes and masked these crash bugs.
+   * Regression (review 2026-11-14; regenerated for v3): renders the VERBATIM
+   * real backend route response (POST /api/route, real CSV upload, as_of
+   * 2026-09-30, v3 defaults incl. solver_solution_limit=200). Real wire
+   * shapes: FLAT unserved {location_id, material_type, reason}, load_
+   * progression as [volume, weight] TUPLE arrays, v3 cost block +
+   * collected_volume_by_material + travel_time_mode echo.
    */
-  it("renders the real captured route: 415 unserved with reasons, tuple load progression", async () => {
+  it("renders the real captured v3 route: 424 unserved with reasons, cost block, per-material volumes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(realRouteCapture)));
     const onRoute = vi.fn();
 
@@ -82,25 +94,41 @@ describe("RoutePanel", () => {
       "feasible",
     );
     const totals = document.querySelector('[data-testid="route-totals"]')?.textContent ?? "";
-    expect(totals).toContain("69,889 m (69.9 km)");
-    expect(totals).toContain("601 min");
-    expect(totals).toContain("47,880 L");
-    expect(totals).toContain("23,940 kg");
-    expect(totals).toContain("43 of 458");
+    expect(totals).toContain("70,175 m (70.2 km)");
+    expect(totals).toContain("580 min");
+    expect(totals).toContain("45,000 L");
+    expect(totals).toContain("22,500 kg");
+    expect(totals).toContain("34 of 458");
     expect(totals).toContain("demo_truck");
-    expect(totals).toContain("63 vehicle(s)");
+    expect(totals).toContain("99 vehicle(s)");
 
-    // Flat unserved entries render location · material + reason (415 of them).
+    // v3 cost block: [predicted] derivations, never invoiced amounts (§4.4).
+    const cost = document.querySelector('[data-testid="route-cost"]')?.textContent ?? "";
+    expect(cost).toContain("3 vehicle(s)");
+    expect(cost).toContain("1,500 EUR/day · 300,000 EUR/year");
+    expect(cost).toContain("49,500 EUR/day · 9,900,000 EUR/year");
+    expect(cost).toContain("not invoiced");
+
+    // v3 compartment visibility: litres per material.
+    const volumes = document.querySelector('[data-testid="route-volumes-by-material"]')?.textContent ?? "";
+    expect(volumes).toContain("brown");
+    expect(volumes).toContain("15,000 L");
+
+    // v3 travel_time_mode echo in technical details.
+    const details = document.querySelector('[data-testid="route-tech-details"]')?.textContent ?? "";
+    expect(details).toContain("fixed_per_leg");
+
+    // Flat unserved entries render location · material + reason (424 of them).
     const unserved = document.querySelector('[data-testid="unserved-list"]')?.textContent ?? "";
     expect(unserved).toContain("0058ed93-88f5-4c25-8746-2e5ee87e5559 · white");
     expect(unserved).toContain("no feasible insertion");
     const unservedItems = document.querySelectorAll('[data-testid="unserved-list"] li');
-    expect(unservedItems.length).toBe(415);
+    expect(unservedItems.length).toBe(424);
 
-    // Tuple load progression renders with units: "1,900 L / 950 kg".
-    expect(document.body.textContent).toContain("1,900 L / 950 kg");
+    // Tuple load progression renders with units: "2,700 L / 1,350 kg".
+    expect(document.body.textContent).toContain("2,700 L / 1,350 kg");
     expect(onRoute).toHaveBeenCalledWith(realRouteCapture);
-    expect((onRoute.mock.calls[0]?.[0] as RouteResponse).solution.unserved.length).toBe(415);
+    expect((onRoute.mock.calls[0]?.[0] as RouteResponse).solution.unserved.length).toBe(424);
   });
 
   it("warns (but does not hide) when the solver returns infeasible", async () => {

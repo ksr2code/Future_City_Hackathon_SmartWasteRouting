@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   ApiError,
+  MATERIAL_TYPES,
   runRoute,
   type PolicyConfigOverride,
   type Route,
@@ -16,7 +17,7 @@ import {
   formatStopKey,
   provenanceLabel,
 } from "../lib/format";
-import { StatusBadge } from "./Badges";
+import { StatusBadge, MaterialBadge } from "./Badges";
 import { ForecastParamsForm, type ForecastParams } from "./ForecastParamsForm";
 import { Panel } from "./Panel";
 import { RouteMap } from "./RouteMap";
@@ -26,9 +27,17 @@ import { EmptyState, ErrorState, LoadingState } from "./states";
 /**
  * Route view (§5.1 POST /api/route): pipeline forecast → policy → geography →
  * solve. Shows map with per-route polylines and ordered stops, unserved stops
- * with reasons (never hidden, §4.4), totals with units, fleet recommendation,
- * and the echoed assumptions array ([demo assumption] labels).
+ * with reasons (never hidden, §4.4), totals with units, v3 cost block
+ * ([predicted] derived, §4.3/§4.4), per-material collected volumes, fleet
+ * recommendation, and the echoed assumptions array ([demo assumption] labels).
  */
+
+/** EUR amounts — unit-explicit, "—" when missing (v3 cost fields). */
+function formatEur(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toLocaleString("en-US")} EUR`
+    : "— EUR";
+}
 export function RoutePanel({
   defaultAsOf,
   policyOverride,
@@ -145,9 +154,48 @@ export function RoutePanel({
               <span>{provenanceLabel(solution.distance_provenance)}</span>
             </div>
             <p>Objective value: {solution.objective_value ?? "—"}</p>
+            <p data-testid="route-travel-time-mode">
+              Travel time mode: {solution.travel_time_mode ?? "—"}
+              {solution.travel_time_mode === "fixed_per_leg"
+                ? " — fixed minutes on every leg incl. depot/disposal"
+                : solution.travel_time_mode === "haversine_derived"
+                  ? " — duration from straight-line distance ÷ speed"
+                  : ""}
+            </p>
           </TechDetails>
 
           <TotalsBar response={result} />
+
+          {/* v3 cost block (§4.3): [predicted] derivations from the configured
+              cost parameters — never invoiced amounts (§4.4). */}
+          <div
+            className="grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3"
+            data-testid="route-cost"
+          >
+            <Total
+              label="Trucks in use"
+              value={`${solution.cost.vehicles_used} vehicle(s) — [predicted] derived, not invoiced (§4.4)`}
+            />
+            <Total
+              label="Cost (trucks in use)"
+              value={`${formatEur(solution.cost.cost_eur_per_day)}/day · ${formatEur(solution.cost.cost_eur_per_year)}/year`}
+            />
+            <Total
+              label={`Fleet cost: ${solution.cost.fleet_cost.trucks} recommended truck(s)`}
+              value={`${formatEur(solution.cost.fleet_cost.cost_eur_per_day)}/day · ${formatEur(solution.cost.fleet_cost.cost_eur_per_year)}/year`}
+            />
+          </div>
+
+          {/* v3 compartment visibility (§4.3/§4.4): litres per material. */}
+          <div className="text-xs text-slate-700" data-testid="route-volumes-by-material">
+            <span className="font-semibold text-slate-700">Collected volume by material: </span>
+            {MATERIAL_TYPES.map((m) => (
+              <span key={m} className="mr-3">
+                <MaterialBadge material={m} />{" "}
+                {formatLitres(solution.totals.collected_volume_by_material?.[m])}
+              </span>
+            ))}
+          </div>
 
           <RouteMap solution={solution} />
 

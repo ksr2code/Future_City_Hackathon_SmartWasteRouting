@@ -15,6 +15,7 @@ import { cleanup, flush, jsonResponse, render } from "../test/dom";
 import {
   comparisonFixture,
   comparisonMedianOfRunsFixture,
+  daysToFullFixture,
   selectionFixture,
   summaryFixture,
   summaryWithFillStats,
@@ -45,6 +46,7 @@ function stubRoutes(routes: Record<string, (args: FetchArgs) => Response>): Mock
 const happyRoutes = (): Record<string, (args: FetchArgs) => Response> => ({
   "POST /api/candidates": () => jsonResponse(selectionFixture),
   "GET /api/comparison": () => jsonResponse(comparisonFixture),
+  "GET /api/days-to-full": () => jsonResponse(daysToFullFixture),
 });
 
 const emptySummary: DatasetSummary | null = null;
@@ -237,22 +239,37 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     expect(document.querySelector('[data-testid="comparison-steps"]')).not.toBeNull();
     const steps = document.body.textContent ?? "";
     // Status quo (real capture values, straight-line-derived; units present).
-    expect(steps).toContain("230,865 m");
-    expect(steps).toContain("78 / 1,338");
-    expect(steps).toContain("5.6 m/kg");
+    expect(steps).toContain("454,623 m");
+    expect(steps).toContain("50 / 1,338");
+    expect(steps).toContain("10.1 m/kg");
     // Selection-effect sweep.
-    expect(steps).toContain("262,995 m");
-    expect(steps).toContain("63 / 458");
-    expect(steps).toContain("5.0 m/kg");
+    expect(steps).toContain("527,021 m");
+    expect(steps).toContain("38 / 458");
+    expect(steps).toContain("10.6 m/kg");
     // Optimised (median of 5 solves).
-    expect(steps).toContain("57,657 m");
-    expect(steps).toContain("40 / 458");
-    expect(steps).toContain("2.4 m/kg");
+    expect(steps).toContain("70,175 m");
+    expect(steps).toContain("34 / 458");
+    expect(steps).toContain("3.1 m/kg");
     expect(steps).toContain("median of 5 solves");
-    // Derived savings: total_gain 173208 / sweep_all 230865 = 75.0 %.
+    // v3 per-scenario cost rows (3 trucks in use × 500 EUR/truck-day [predicted]).
+    expect(steps).toContain("1,500 EUR/day · 300,000 EUR/year");
+    // Derived savings: total_gain 384448 / sweep_all 454623 = 84.6 %.
     const savings = document.querySelector('[data-testid="comparison-savings"]')?.textContent ?? "";
     expect(savings).toContain("Derived saving share");
-    expect(savings).toContain("75.0 %");
+    expect(savings).toContain("84.6 %");
+    // v3 fleet-budget card (ortools fleet recommendation priced at §4.6 rates).
+    const budget = document.querySelector('[data-testid="fleet-budget"]')?.textContent ?? "";
+    expect(budget).toContain("Fleet budget");
+    expect(budget).toContain("99 vehicles");
+    expect(budget).toContain("49,500 EUR");
+    expect(budget).toContain("9,900,000 EUR");
+    expect(budget).toContain("predicted");
+    // v3 days-to-full KPI ([predicted] estimates; all numbers from the API).
+    const dtf = document.querySelector('[data-testid="keynum-days-to-full"]')?.textContent ?? "";
+    expect(dtf).toContain("48.3 d");
+    expect(dtf).toContain("1,213");
+    expect(dtf).toContain("1,338");
+    expect(dtf).toContain("median_positive_pair_rate");
   });
 
   it("labels the negative selection gain honestly (never spun positive)", async () => {
@@ -271,7 +288,7 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     await flush();
 
     const gain = document.querySelector('[data-testid="comparison-selection-gain"]')?.textContent ?? "";
-    expect(gain).toContain("−32,130 m");
+    expect(gain).toContain("−72,398 m");
     expect(gain).toContain("did not pay off");
   });
 
@@ -291,8 +308,8 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     await flush();
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("+205,338 m");
-    expect(text).toContain("+173,208 m");
+    expect(text).toContain("+456,846 m");
+    expect(text).toContain("+384,448 m");
   });
 
   it("renders nullable per-metrics as — and hides gains without fabricating 0s", async () => {
@@ -379,9 +396,9 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     details?.setAttribute("open", "true");
     const text = details?.textContent ?? "";
     expect(text).toContain("varied across 5 solves");
-    expect(text).toContain("median 57,657 m");
-    expect(text).toContain("57,100 m");
-    expect(text).toContain("58,300 m");
+    expect(text).toContain("median 70,175 m");
+    expect(text).toContain("69,800 m");
+    expect(text).toContain("70,900 m");
     expect(text).toContain("NOT road distance");
   });
 

@@ -98,9 +98,17 @@ export interface PolicyConfigOverride {
   overfull_always_selected?: boolean;
 }
 
+/** §4.2/§4.6 v3 travel-time mode: fixed minutes per leg, or speed-derived. */
+export type TravelTimeMode = "fixed_per_leg" | "haversine_derived";
+
+/** §4.6 v3 / §5.2 per-field source label for the config assumptions panel. */
+export type ConfigSourceLabel = "representative" | "demo assumption";
+
 /**
- * `routing_config` override (§5.2 RouteRequest, v1 single demo vehicle type).
- * All optional — only non-undefined fields are sent; backend validates and echoes.
+ * `routing_config` override (§5.2 RouteRequest v3, single demo vehicle type).
+ * All optional — only non-undefined fields are sent; backend validates and
+ * echoes. `vehicle_compartment_volume_litres` absent/null ⇒ equal thirds
+ * (§4.2: explicit values must each be > 0 and sum to the vehicle volume).
  */
 export interface RoutingConfigOverride {
   container_volume_litres?: number;
@@ -108,37 +116,69 @@ export interface RoutingConfigOverride {
   vehicle_volume_capacity_litres?: number;
   vehicle_weight_capacity_kg?: number;
   vehicle_count_available?: number;
+  vehicle_compartment_volume_litres?: Partial<Record<MaterialType, number>> | null;
   stop_service_minutes?: number;
   disposal_service_minutes?: number;
   max_shift_minutes?: number;
+  travel_time_mode?: TravelTimeMode;
+  fixed_travel_minutes?: number;
+  cost_per_truck_day_eur?: number;
+  operating_days_per_week?: number;
+  operating_days_per_year?: number;
+  geography_seed?: number;
+  geography_spread_km?: number;
   avg_speed_kmh?: number;
   detour_factor?: number;
+  solver_solution_limit?: number;
   solver_time_limit_s?: number;
 }
 
-/** Full routing defaults (§4.6 values) as returned by GET /api/config. */
+/** Full routing defaults (§4.6 v3 values) as returned by GET /api/config. */
 export interface RoutingConfigDefaults {
   container_volume_litres: number;
   densities_kg_per_litre: Partial<Record<MaterialType, number>>;
   vehicle_volume_capacity_litres: number;
   vehicle_weight_capacity_kg: number;
   vehicle_count_available: number;
+  vehicle_compartment_volume_litres: Partial<Record<MaterialType, number>> | null;
   stop_service_minutes: number;
   disposal_service_minutes: number;
   max_shift_minutes: number;
+  travel_time_mode: TravelTimeMode;
+  fixed_travel_minutes: number;
+  cost_per_truck_day_eur: number;
+  operating_days_per_week: number;
+  operating_days_per_year: number;
+  geography_seed: number;
+  geography_spread_km: number;
   avg_speed_kmh: number;
   detour_factor: number;
+  solver_solution_limit: number;
   solver_time_limit_s: number;
 }
 
 /**
- * GET /api/config → §5.2 ConfigDefaults: §3.1 policy defaults, §4.6 routing
- * defaults, and the names of every field that is a [demo assumption].
+ * GET /api/config → §5.2 ConfigDefaults: §3.1 policy defaults, §4.6 v3
+ * routing defaults, the names of every [demo assumption] field, and the v3
+ * per-field `sources` map ("representative" vs "demo assumption"). Renderers
+ * MUST fail safe: a missing/invalid `sources` entry labels the field
+ * [demo assumption] — never silently upgrades a value to a fact (§5.3).
  */
 export interface ConfigDefaults {
   policy: PolicyConfig;
   routing: RoutingConfigDefaults;
   assumption_fields: string[];
+  sources: Record<string, ConfigSourceLabel>;
+}
+
+/**
+ * Fail-safe source lookup for the UI: only "representative" counts as such;
+ * anything else (missing map, missing field, typo) degrades to
+ * "demo assumption" (§5.3 — never silently relabel values as facts).
+ */
+export function sourceLabel(config: ConfigDefaults | null, field: string): ConfigSourceLabel {
+  const raw = config?.sources?.[field];
+  return raw === "representative" ? "representative" : "demo assumption";
 }
 
 /** §5.2 ForecastRequest (horizon_days optional, default 28 [demo assumption]) */
@@ -201,8 +241,13 @@ export interface SelectionResponse {
   skipped: Skip[];
 }
 
-/** §4.2 Stop as it appears inside a route sequence */
+/**
+ * §4.3 Route.sequence element: Stop | Depot | DisposalSite. §5.2.1 pin: the
+ * JSON carries an explicit `node_type` discriminator; stops also carry their
+ * routing `point_id` (depot+disposal+stops matrix key).
+ */
 export interface StopNode {
+  node_type: "stop";
   location_id: string;
   material_type: MaterialType;
   lat: number;
@@ -210,10 +255,12 @@ export interface StopNode {
   container_volume_litres: number;
   predicted_fill_pct: number;
   service_minutes: number;
+  point_id: string;
 }
 
 /** §4.2 Depot */
 export interface DepotNode {
+  node_type: "depot";
   id: string;
   name: string;
   lat: number;
@@ -222,6 +269,7 @@ export interface DepotNode {
 
 /** §4.2 DisposalSite */
 export interface DisposalNode {
+  node_type: "disposal";
   id: string;
   name: string;
   lat: number;
@@ -229,17 +277,10 @@ export interface DisposalNode {
   service_minutes: number;
 }
 
-/**
- * §4.3 Route.sequence element: Stop | Depot | DisposalSite. The JSON has no
- * explicit discriminator field, so `sequenceNodeKind` discriminates by
- * field presence (stops carry `location_id`; depot/disposal carry `id`).
- */
 export type SequenceNode = StopNode | DepotNode | DisposalNode;
 
 export function sequenceNodeKind(node: SequenceNode): "stop" | "depot" | "disposal" {
-  if ("location_id" in node && "material_type" in node) return "stop";
-  if ("service_minutes" in node) return "disposal";
-  return "depot";
+  return node.node_type;
 }
 
 /** §4.3 Route (backend RouteResponseItem: pairs are (volume_litres, weight_kg)). */
@@ -268,6 +309,8 @@ export interface SolutionTotals {
   distance_m: number;
   duration_min: number;
   collected_volume_litres: number;
+  /** §4.3 v3: litres per material — compartment visibility (§4.4 limitation). */
+  collected_volume_by_material: Record<MaterialType, number>;
   collected_weight_kg: number;
   stops_served: number;
   stops_total: number;
@@ -279,7 +322,26 @@ export interface FleetRecommendation {
   basis: { ceil_by_volume: number; ceil_by_weight: number };
 }
 
-/** §4.3 RoutingSolution */
+/** §4.3 v3 cost.fleet_cost — fleet-recommendation cost ([predicted] derived). */
+export interface SolutionFleetCost {
+  trucks: number;
+  cost_eur_per_day: number;
+  cost_eur_per_year: number;
+}
+
+/**
+ * §4.3 v3 solution cost block — pure derivations ([predicted], never invoiced
+ * amounts, §4.4): cost_eur_per_day = vehicles_used × cost_per_truck_day_eur;
+ * cost_eur_per_year = cost_eur_per_day × operating_days_per_year.
+ */
+export interface SolutionCost {
+  vehicles_used: number;
+  cost_eur_per_day: number;
+  cost_eur_per_year: number;
+  fleet_cost: SolutionFleetCost;
+}
+
+/** §4.3 RoutingSolution (v3 echoes travel_time_mode + cost block) */
 export interface RoutingSolution {
   status: SolveStatus;
   objective_value: number | null;
@@ -287,6 +349,9 @@ export interface RoutingSolution {
   unserved: UnservedStop[];
   totals: SolutionTotals;
   fleet_recommendation: FleetRecommendation;
+  /** §4.3 v3 echo of the effective travel-time mode (§4.2). */
+  travel_time_mode: TravelTimeMode;
+  cost: SolutionCost;
   distance_provenance: DistanceProvenance;
 }
 
@@ -328,6 +393,12 @@ export interface ComparisonScenario {
   fleet_basis: { ceil_by_volume: number; ceil_by_weight: number };
   distance_per_stop_m: number | null;
   distance_per_kg_m: number | null;
+  /** §4.6 v3 echo of the effective travel-time mode. */
+  travel_time_mode: TravelTimeMode;
+  /** [predicted] vehicles_used × cost_per_truck_day_eur (§5.2.2 v3). */
+  cost_eur_per_day: number;
+  /** [predicted] cost_eur_per_day × operating_days_per_year. */
+  cost_eur_per_year: number;
 }
 
 /** §5.2.2 gains (metres); `null` when a difference would be fabricated. */
@@ -346,11 +417,20 @@ export interface OptimisedDeterminism {
   distance_m_max: number;
 }
 
+/** §5.2.2 v3 fleet budget — ortools fleet recommendation priced at §4.6 rates. */
+export interface FleetBudget {
+  vehicle_type_id: string;
+  trucks: number;
+  cost_eur_per_day: number;
+  cost_eur_per_year: number;
+}
+
 /**
- * §5.2.2 ComparisonResponse (v2). Echoes fixed CLI defaults (as_of/target/
- * horizon, method "persistence"). `scenarios` is in the fixed §4.7 order
- * (`naive_sweep_all`, `naive_sweep_selected`, `ortools`). `distance_provenance`
- * is `haversine_straight_line_derived` — never present as road distance.
+ * §5.2.2 ComparisonResponse (v2 scenarios + v3 cost/fleet_budget). Echoes
+ * fixed CLI defaults (as_of/target/horizon, method "persistence"). `scenarios`
+ * is in the fixed §4.7 order (`naive_sweep_all`, `naive_sweep_selected`,
+ * `ortools`). `distance_provenance` is `haversine_straight_line_derived` —
+ * never present as road distance.
  */
 export interface ComparisonResponse {
   as_of_date: string;
@@ -360,7 +440,46 @@ export interface ComparisonResponse {
   scenarios: ComparisonScenario[];
   gains: ComparisonGains;
   optimised_determinism: OptimisedDeterminism;
+  fleet_budget: FleetBudget;
   distance_provenance: DistanceProvenance;
+  assumptions: string[];
+}
+
+/**
+ * §5.2.3 Days-to-full (v3): [predicted] per-series estimate from fill history
+ * only. `days_to_full` is null exactly when `reason` is set and is not
+ * `already_full` (which keeps `days_to_full = 0.0` — a state fact).
+ */
+export type DaysToFullReason = "no_numeric_history" | "no_positive_rate" | "already_full";
+
+export interface DaysToFullSeries {
+  location_id: string;
+  material_type: MaterialType;
+  last_date: string;
+  last_fill_pct: number | null;
+  last_is_overfull: boolean;
+  /** Median positive consecutive-pair rate (percent per day). */
+  rate_pct_per_day: number | null;
+  /** max(0, (100 − last numeric fill) / rate), 1 d.p. */
+  days_to_full: number | null;
+  reason: DaysToFullReason | null;
+}
+
+/** Aggregate stats cover series with an estimate only; nulls when none exist. */
+export interface DaysToFullStats {
+  series_total: number;
+  series_with_estimate: number;
+  median_days: number | null;
+  mean_days: number | null;
+  min_days: number | null;
+  max_days: number | null;
+}
+
+export interface DaysToFullResponse {
+  method: "median_positive_pair_rate";
+  stats: DaysToFullStats;
+  series: DaysToFullSeries[];
+  /** Caveats echoed by the API (median reading gap, constant-rate assumption). */
   assumptions: string[];
 }
 
@@ -473,6 +592,15 @@ export async function runRoute(payload: RouteRequest): Promise<RouteResponse> {
  */
 export async function fetchComparison(): Promise<ComparisonResponse> {
   return request<ComparisonResponse>("/api/comparison");
+}
+
+/**
+ * GET /api/days-to-full (§5.2.3 v3): [predicted] days-to-full per series from
+ * the fill history of the active dataset. 404 when no dataset is loaded (§5.3)
+ * — callers must turn that into an empty state, not an error.
+ */
+export async function fetchDaysToFull(): Promise<DaysToFullResponse> {
+  return request<DaysToFullResponse>("/api/days-to-full");
 }
 
 /**

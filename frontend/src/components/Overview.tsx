@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   fetchComparison,
+  fetchDaysToFull,
   runCandidates,
   type ComparisonMethod,
   type ComparisonResponse,
   type ComparisonScenario,
+  type DaysToFullResponse,
   type DatasetSummary,
   type FillStats,
+  type FleetBudget,
   type SelectionResponse,
 } from "../lib/api";
 import { formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "../lib/format";
@@ -39,6 +42,8 @@ export interface OverviewProps {
   summaryLoading: boolean;
   summaryError: string | null;
   datasetVersion: number;
+  /** Bumped by the config editor's Recalculate button — re-runs auto flows. */
+  recalculateKey?: number;
   /** Same handler as a CSV upload — a demo load activates the dataset (§5.1). */
   onDemoLoaded: (summary: DatasetSummary) => void;
 }
@@ -111,12 +116,53 @@ function scenarioByMethod(
   return s !== undefined ? s : null;
 }
 
+/** Defensive §5.2.3 v3 payload guard — malformed payloads degrade, never crash. */
+function validDaysToFull(payload: DaysToFullResponse | null): DaysToFullResponse | null {
+  if (payload === null) return null;
+  const stats = payload.stats;
+  if (typeof stats !== "object" || stats === null) return null;
+  if (!isFiniteNumber(stats.series_total) || !isFiniteNumber(stats.series_with_estimate)) {
+    return null;
+  }
+  if (!Array.isArray(payload.series) || !Array.isArray(payload.assumptions)) return null;
+  return payload;
+}
+
+/** EUR amounts from the v3 cost fields — unit-explicit, "—" when missing. */
+function formatEur(value: number | null | undefined): string {
+  return isFiniteNumber(value) ? `${value.toLocaleString("en-US")} EUR` : "— EUR";
+}
+
+/** Defensive §5.2.2 v3 fleet-budget guard — malformed payloads hide the card. */
+function validFleetBudget(budget: FleetBudget | null | undefined): FleetBudget | null {
+  if (budget === null || budget === undefined || typeof budget !== "object") return null;
+  if (
+    typeof budget.vehicle_type_id !== "string" ||
+    budget.vehicle_type_id === "" ||
+    !isFiniteNumber(budget.trucks) ||
+    !isFiniteNumber(budget.cost_eur_per_day) ||
+    !isFiniteNumber(budget.cost_eur_per_year)
+  ) {
+    return null;
+  }
+  return budget;
+}
+
+/** Per-scenario cost row value (§5.2.2 v3), e.g. "1,500 EUR/day · 300,000 EUR/year". */
+function formatCostRow(scenario: ComparisonScenario): string {
+  if (!isFiniteNumber(scenario.cost_eur_per_day) || !isFiniteNumber(scenario.cost_eur_per_year)) {
+    return "— EUR/day · — EUR/year";
+  }
+  return `${formatEur(scenario.cost_eur_per_day)}/day · ${formatEur(scenario.cost_eur_per_year)}/year`;
+}
+
 export function Overview({
   lang,
   summary,
   summaryLoading,
   summaryError,
   datasetVersion,
+  recalculateKey = 0,
   onDemoLoaded,
 }: OverviewProps) {
   // Auto-run candidates (§5.1 POST /api/candidates) for "today's recommendation".
@@ -129,6 +175,11 @@ export function Overview({
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [comparisonNotFound, setComparisonNotFound] = useState(false);
+
+  // Days-to-full KPI (§5.2.3 v3 GET /api/days-to-full) — [predicted] estimates.
+  const [daysToFull, setDaysToFull] = useState<DaysToFullResponse | null>(null);
+  const [daysToFullLoading, setDaysToFullLoading] = useState(false);
+  const [daysToFullError, setDaysToFullError] = useState<string | null>(null);
 
   const asOf =
     typeof summary?.date_max === "string" && ISO_DATE.test(summary.date_max)
@@ -174,7 +225,7 @@ export function Overview({
     return () => {
       cancelled = true;
     };
-  }, [asOf, datasetVersion]);
+  }, [asOf, datasetVersion, recalculateKey]);
 
   // Comparison only exists once a dataset is loaded (404 before, §5.3 → empty state).
   useEffect(() => {
@@ -214,7 +265,43 @@ export function Overview({
     return () => {
       cancelled = true;
     };
-  }, [hasDataset, datasetVersion]);
+  }, [hasDataset, datasetVersion, recalculateKey]);
+
+  // Days-to-full (§5.2.3 v3) — like the comparison: 404 before a dataset is a
+  // state fact (empty card note), never an error; estimates are [predicted].
+  useEffect(() => {
+    if (!hasDataset) {
+      setDaysToFull(null);
+      setDaysToFullError(null);
+      return;
+    }
+    let cancelled = false;
+    setDaysToFullLoading(true);
+    setDaysToFullError(null);
+    fetchDaysToFull()
+      .then((payload) => {
+        if (cancelled) return;
+        if (validDaysToFull(payload) === null) {
+          setDaysToFull(null);
+          setDaysToFullError("Unexpected /api/days-to-full response shape");
+          return;
+        }
+        setDaysToFull(payload);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setDaysToFull(null);
+        if (!(err instanceof ApiError && err.status === 404)) {
+          setDaysToFullError(err instanceof ApiError ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDaysToFullLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDataset, datasetVersion, recalculateKey]);
 
   const fillStats = validFillStats(summary);
   const selected = selection?.selected ?? [];
@@ -237,6 +324,10 @@ export function Overview({
     sweepAll.distance_m > 0
       ? (gains.total_gain_m / sweepAll.distance_m) * 100
       : null;
+  // §5.2.3 v3 stats — all numbers come from the API, never hardcoded.
+  const dtfStats = validDaysToFull(daysToFull)?.stats ?? null;
+  // v3 fleet budget — validated once, reused by guard and card body.
+  const fleetBudget = validFleetBudget(comparisonValid?.fleet_budget ?? null);
 
   return (
     <div className="space-y-4" data-testid="overview-root">
@@ -265,9 +356,9 @@ export function Overview({
         </div>
       ) : null}
 
-      {/* Three plain-language key numbers */}
+      {/* Three plain-language key numbers (plus the v3 days-to-full prediction) */}
       {!summaryLoading && summaryError === null && hasDataset ? (
-        <div className="grid gap-4 md:grid-cols-3" data-testid="overview-keynumbers">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" data-testid="overview-keynumbers">
           <KeyNumberCard
             title={t(lang, "overview.keynum.readings.title")}
             value={fillStats !== null ? formatPct(fillStats.share_readings_full_or_above_pct, 1) : "— %"}
@@ -313,6 +404,37 @@ export function Overview({
               </>
             ) : (
               t(lang, "overview.state.comparisonNoDataset")
+            )}
+          </KeyNumberCard>
+          <KeyNumberCard
+            title={t(lang, "overview.keynum.daysToFull.title")}
+            value={
+              dtfStats !== null && dtfStats.median_days !== null ? `${dtfStats.median_days.toFixed(1)} d` : "— d"
+            }
+            testid="keynum-days-to-full"
+          >
+            {daysToFullLoading ? (
+              t(lang, "overview.state.daysToFullLoading")
+            ) : daysToFullError !== null ? (
+              <span className="text-amber-700">{daysToFullError}</span>
+            ) : dtfStats === null || dtfStats.series_with_estimate === 0 ? (
+              t(lang, "overview.keynum.daysToFull.noData")
+            ) : (
+              <>
+                {tf(lang, "overview.keynum.daysToFull.note", {
+                  n: dtfStats.series_with_estimate.toLocaleString("en-US"),
+                  total: dtfStats.series_total.toLocaleString("en-US"),
+                })}
+                {daysToFull !== null ? (
+                  <>
+                    <span className="mt-1 block">
+                      {t(lang, "overview.keynum.daysToFull.method")}: {daysToFull.method} —{" "}
+                      {t(lang, "overview.keynum.daysToFull.predicted")}
+                    </span>
+                    <span className="mt-1 block">{daysToFull.assumptions.join(" · ")}</span>
+                  </>
+                ) : null}
+              </>
             )}
           </KeyNumberCard>
         </div>
@@ -425,6 +547,7 @@ export function Overview({
                   [t(lang, "col.trucks"), `${sweepAll.recommended_trucks} ${t(lang, "unit.vehicles")}`],
                   [t(lang, "col.volume"), formatLitres(sweepAll.collected_volume_litres)],
                   [t(lang, "col.weight"), formatKg(sweepAll.collected_weight_kg)],
+                  [t(lang, "col.cost"), formatCostRow(sweepAll)],
                   [
                     t(lang, "col.distancePerKg"),
                     sweepAll.distance_per_kg_m !== null
@@ -446,6 +569,7 @@ export function Overview({
                   [t(lang, "col.trucks"), `${sweepSelected.recommended_trucks} ${t(lang, "unit.vehicles")}`],
                   [t(lang, "col.volume"), formatLitres(sweepSelected.collected_volume_litres)],
                   [t(lang, "col.weight"), formatKg(sweepSelected.collected_weight_kg)],
+                  [t(lang, "col.cost"), formatCostRow(sweepSelected)],
                   [
                     t(lang, "col.distancePerKg"),
                     sweepSelected.distance_per_kg_m !== null
@@ -491,6 +615,7 @@ export function Overview({
                   [t(lang, "col.trucks"), `${optimised.recommended_trucks} ${t(lang, "unit.vehicles")}`],
                   [t(lang, "col.volume"), formatLitres(optimised.collected_volume_litres)],
                   [t(lang, "col.weight"), formatKg(optimised.collected_weight_kg)],
+                  [t(lang, "col.cost"), formatCostRow(optimised)],
                   [
                     t(lang, "col.distancePerKg"),
                     optimised.distance_per_kg_m !== null
@@ -522,6 +647,33 @@ export function Overview({
               <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-savings">
                 {tf(lang, "overview.compare.savings", { pct: `${savingsPct.toFixed(1)} %` })}
               </p>
+            ) : null}
+            {fleetBudget !== null ? (
+              <div
+                className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                data-testid="fleet-budget"
+              >
+                <p className="text-sm font-semibold text-slate-800">
+                  {t(lang, "overview.fleetBudget.title")}
+                </p>
+                <dl className="mt-1 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">{t(lang, "col.trucks")}</dt>
+                    <dd className="text-right text-slate-800">
+                      {fleetBudget.trucks} {t(lang, "unit.vehicles")} ({fleetBudget.vehicle_type_id})
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perDay")}</dt>
+                    <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_day)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perYear")}</dt>
+                    <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_year)}</dd>
+                  </div>
+                </dl>
+                <p className="mt-1 text-slate-500">{t(lang, "overview.fleetBudget.note")}</p>
+              </div>
             ) : null}
             <TechDetails label={t(lang, "techdetails.label")} testid="comparison-tech-details">
               <p data-testid="comparison-statuses">

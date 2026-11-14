@@ -39,6 +39,22 @@ const en = {
   "overview.keynum.distance.optimised": "Optimised",
   "overview.keynum.distance.savings":
     "Derived saving (total gain ÷ sweep-all distance): {pct}",
+  "overview.keynum.daysToFull.title": "Predicted days until containers are full",
+  "overview.keynum.daysToFull.note":
+    "{n} of {total} container series have an estimate (median of the per-series predictions).",
+  "overview.keynum.daysToFull.noData":
+    "No days-to-full estimates for this dataset (no usable fill history).",
+  "overview.keynum.daysToFull.method": "Method",
+  "overview.keynum.daysToFull.predicted": "prediction from fill history, not a measurement",
+
+  "overview.fleetBudget.title": "Fleet budget — recommended fleet",
+  "overview.fleetBudget.perDay": "Cost per operating day",
+  "overview.fleetBudget.perYear": "Cost per year",
+  "overview.fleetBudget.note":
+    "Recommended fleet priced at the configured truck cost — API-derived [predicted], never an invoice amount.",
+
+  "config.compartments.hint":
+    "Leave all three empty for equal thirds, or fill all three — they must sum to the truck volume.",
 
   "overview.how.title": "How it works",
   "overview.how.step1": "Upload fill-level readings",
@@ -89,6 +105,7 @@ const en = {
   "col.unserved": "Unserved",
   "col.volume": "Volume collected",
   "col.weight": "Weight collected",
+  "col.cost": "Cost (trucks in use)",
   "unit.containers": "containers",
   "unit.vehicles": "vehicles",
 
@@ -119,6 +136,7 @@ const en = {
   "overview.state.comparisonError": "Could not compute the comparison",
   "overview.state.comparisonNoDataset":
     "No dataset loaded — the comparison becomes available after loading data.",
+  "overview.state.daysToFullLoading": "Computing days-to-full estimates",
   "overview.tech.assumptions": "Labelled assumptions returned by the API",
 
   "techdetails.label": "Technical details",
@@ -156,6 +174,22 @@ const de: Record<TranslationKey, string> = {
   "overview.keynum.distance.optimised": "Optimiert",
   "overview.keynum.distance.savings":
     "Abgeleitete Ersparnis (Gesamtgewinn ÷ Sweep-alle-Stopp-Strecke): {pct}",
+  "overview.keynum.daysToFull.title": "Prognostizierte Tage bis volle Behälter",
+  "overview.keynum.daysToFull.note":
+    "{n} von {total} Behälter-Serien haben eine Schätzung (Median der Einzelschätzungen).",
+  "overview.keynum.daysToFull.noData":
+    "Keine Tage-bis-voll-Schätzungen für diesen Datensatz (keine verwertbare Füllstands-Historie).",
+  "overview.keynum.daysToFull.method": "Methode",
+  "overview.keynum.daysToFull.predicted": "Prognose aus Füllstands-Historie, keine Messung",
+
+  "overview.fleetBudget.title": "Flotten-Budget — empfohlene Flotte",
+  "overview.fleetBudget.perDay": "Kosten pro Betriebstag",
+  "overview.fleetBudget.perYear": "Kosten pro Jahr",
+  "overview.fleetBudget.note":
+    "Empfohlene Flotte zum konfigurierten Fahrzeugsatz — von der API abgeleitet [Prognose], nie ein Rechnungsbetrag.",
+
+  "config.compartments.hint":
+    "Alle drei leer lassen (gleiche Drittel) oder alle drei ausfüllen — die Summe muss dem Fahrzeuggesamtvolumen entsprechen.",
 
   "overview.how.title": "So funktioniert es",
   "overview.how.step1": "Füllstands-Messungen hochladen",
@@ -206,6 +240,7 @@ const de: Record<TranslationKey, string> = {
   "col.unserved": "Nicht bedient",
   "col.volume": "Volumen gesammelt",
   "col.weight": "Gewicht gesammelt",
+  "col.cost": "Kosten (eingesetzte Fahrzeuge)",
   "unit.containers": "Behälter",
   "unit.vehicles": "Fahrzeuge",
 
@@ -236,6 +271,7 @@ const de: Record<TranslationKey, string> = {
   "overview.state.comparisonError": "Vergleich konnte nicht berechnet werden",
   "overview.state.comparisonNoDataset":
     "Keine Daten geladen — der Vergleich ist nach dem Laden verfügbar.",
+  "overview.state.daysToFullLoading": "Tage-bis-voll-Schätzungen werden berechnet",
   "overview.tech.assumptions": "Von der API zurückgegebene, gelabelte Annahmen",
 
   "techdetails.label": "Technische Details",

@@ -6,6 +6,7 @@ import type {
   ComparisonResponse,
   ComparisonScenario,
   ConfigDefaults,
+  DaysToFullResponse,
   DatasetSummary,
   RouteResponse,
   SelectionResponse,
@@ -100,8 +101,9 @@ export const routeResponseFixture: RouteResponse = {
       {
         vehicle_type_id: "demo_truck",
         sequence: [
-          { id: "demo_depot", name: "Demo Depot", lat: 49.14, lon: 9.22 },
+          { node_type: "depot", id: "demo_depot", name: "Demo Depot", lat: 49.14, lon: 9.22 },
           {
+            node_type: "stop",
             location_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             material_type: "brown",
             lat: 49.15,
@@ -109,8 +111,16 @@ export const routeResponseFixture: RouteResponse = {
             container_volume_litres: 1900,
             predicted_fill_pct: 92,
             service_minutes: 10,
+            point_id: "stop:aaaaaaaa…:brown",
           },
-          { id: "demo_disposal", name: "Demo Disposal", lat: 49.145, lon: 9.215, service_minutes: 30 },
+          {
+            node_type: "disposal",
+            id: "demo_disposal",
+            name: "Demo Disposal",
+            lat: 49.145,
+            lon: 9.215,
+            service_minutes: 30,
+          },
         ],
         load_progression: [[1200, 600]],
         distance_m: 18400,
@@ -129,6 +139,7 @@ export const routeResponseFixture: RouteResponse = {
       distance_m: 18400,
       duration_min: 95,
       collected_volume_litres: 1200,
+      collected_volume_by_material: { brown: 1200, green: 0, white: 0 },
       collected_weight_kg: 600,
       stops_served: 2,
       stops_total: 3,
@@ -137,6 +148,13 @@ export const routeResponseFixture: RouteResponse = {
       vehicle_type_id: "demo_truck",
       count: 1,
       basis: { ceil_by_volume: 1, ceil_by_weight: 1 },
+    },
+    travel_time_mode: "fixed_per_leg",
+    cost: {
+      vehicles_used: 1,
+      cost_eur_per_day: 500,
+      cost_eur_per_year: 100000,
+      fleet_cost: { trucks: 1, cost_eur_per_day: 500, cost_eur_per_year: 100000 },
     },
     distance_provenance: "haversine_straight_line_derived",
   },
@@ -149,17 +167,26 @@ export const routeResponseFixture: RouteResponse = {
 export const configFixture: ConfigDefaults = {
   policy: { select_threshold_pct: 80, uncertainty_buffer_pct: 0, overfull_always_selected: true },
   routing: {
-    container_volume_litres: 1900,
+    container_volume_litres: 3000,
     densities_kg_per_litre: { brown: 0.5, green: 0.5, white: 0.5 },
     vehicle_volume_capacity_litres: 12000,
     vehicle_weight_capacity_kg: 10000,
     vehicle_count_available: 3,
-    stop_service_minutes: 10,
+    vehicle_compartment_volume_litres: null, // absent ⇒ equal thirds (§4.2)
+    stop_service_minutes: 5,
     disposal_service_minutes: 30,
     max_shift_minutes: 480,
+    travel_time_mode: "fixed_per_leg",
+    fixed_travel_minutes: 10,
+    cost_per_truck_day_eur: 500,
+    operating_days_per_week: 5,
+    operating_days_per_year: 200,
+    geography_seed: 0,
+    geography_spread_km: 6.0,
     avg_speed_kmh: 30,
     detour_factor: 1.4,
-    solver_time_limit_s: 5.0,
+    solver_solution_limit: 200,
+    solver_time_limit_s: 30.0,
   },
   assumption_fields: [
     "select_threshold_pct",
@@ -168,14 +195,42 @@ export const configFixture: ConfigDefaults = {
     "container_volume_litres",
     "vehicle_volume_capacity_litres",
   ],
+  sources: {
+    select_threshold_pct: "demo assumption",
+    uncertainty_buffer_pct: "demo assumption",
+    overfull_always_selected: "demo assumption",
+    container_volume_litres: "representative",
+    densities_kg_per_litre: "demo assumption",
+    vehicle_volume_capacity_litres: "demo assumption",
+    vehicle_weight_capacity_kg: "demo assumption",
+    vehicle_count_available: "demo assumption",
+    vehicle_compartment_volume_litres: "demo assumption",
+    stop_service_minutes: "representative",
+    disposal_service_minutes: "demo assumption",
+    max_shift_minutes: "representative",
+    travel_time_mode: "representative",
+    fixed_travel_minutes: "representative",
+    cost_per_truck_day_eur: "representative",
+    operating_days_per_week: "representative",
+    operating_days_per_year: "representative",
+    geography_seed: "demo assumption",
+    geography_spread_km: "demo assumption",
+    avg_speed_kmh: "demo assumption",
+    detour_factor: "demo assumption",
+    solver_solution_limit: "demo assumption",
+    solver_time_limit_s: "demo assumption",
+    horizon_days: "demo assumption",
+  },
 };
 
 /**
- * §5.2.2 ComparisonResponse (v2) — synthetic fixture with the values observed
- * in the real 2026-11-14 live capture (frontend/src/test/fixtures/real-capture/
- * comparison.json): scenarios in the fixed §4.7 order, nullable per-metrics,
- * gains incl. the honestly-negative selection gain, determinism "identical".
- * Distances are straight-line derived, never road distance.
+ * §5.2.2 ComparisonResponse (v2 scenarios + v3 cost fields) — synthetic
+ * fixture mirroring the real 2026-11-14 live capture (frontend/src/test/
+ * fixtures/real-capture/comparison.json, regenerated for v3): scenarios in
+ * the fixed §4.7 order, nullable per-metrics, gains incl. the honestly-
+ * negative selection gain, determinism "identical", per-scenario cost block
+ * and the fleet budget. Distances are straight-line derived, never road
+ * distance.
  */
 function scenario(
   method: "naive_sweep_all" | "naive_sweep_selected" | "ortools",
@@ -199,6 +254,9 @@ function scenario(
     ...values,
     vehicles_available: 3,
     vehicles_used: 3,
+    travel_time_mode: "fixed_per_leg",
+    cost_eur_per_day: 1500, // 3 trucks in use × 500 EUR/truck-day [predicted]
+    cost_eur_per_year: 300000, // × 200 operating days/year [predicted]
   };
 }
 
@@ -210,58 +268,64 @@ export const comparisonFixture: ComparisonResponse = {
   scenarios: [
     scenario("naive_sweep_all", {
       status: "incomplete",
-      distance_m: 230865,
-      duration_min: 1389,
-      stops_served: 78,
+      distance_m: 454623,
+      duration_min: 1420,
+      stops_served: 50,
       stops_total: 1338,
-      collected_volume_litres: 82270,
-      collected_weight_kg: 41135,
-      unserved_count: 1260,
-      recommended_trucks: 116,
-      fleet_basis: { ceil_by_volume: 116, ceil_by_weight: 70 },
-      distance_per_stop_m: 2959.8,
-      distance_per_kg_m: 5.6,
+      collected_volume_litres: 90300,
+      collected_weight_kg: 45150,
+      unserved_count: 1288,
+      recommended_trucks: 183,
+      fleet_basis: { ceil_by_volume: 183, ceil_by_weight: 110 },
+      distance_per_stop_m: 9092.5,
+      distance_per_kg_m: 10.1,
     }),
     scenario("naive_sweep_selected", {
       status: "incomplete",
-      distance_m: 262995,
-      duration_min: 1364,
-      stops_served: 63,
+      distance_m: 527021,
+      duration_min: 1400,
+      stops_served: 38,
       stops_total: 458,
-      collected_volume_litres: 105830,
-      collected_weight_kg: 52915,
-      unserved_count: 395,
-      recommended_trucks: 63,
-      fleet_basis: { ceil_by_volume: 63, ceil_by_weight: 38 },
-      distance_per_stop_m: 4174.5,
-      distance_per_kg_m: 5.0,
+      collected_volume_litres: 99900,
+      collected_weight_kg: 49950,
+      unserved_count: 420,
+      recommended_trucks: 99,
+      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 60 },
+      distance_per_stop_m: 13869.0,
+      distance_per_kg_m: 10.6,
     }),
     scenario("ortools", {
       status: "feasible",
-      distance_m: 57657,
-      duration_min: 546,
-      stops_served: 40,
+      distance_m: 70175,
+      duration_min: 580,
+      stops_served: 34,
       stops_total: 458,
-      collected_volume_litres: 47880,
-      collected_weight_kg: 23940,
-      unserved_count: 418,
-      recommended_trucks: 63,
-      fleet_basis: { ceil_by_volume: 63, ceil_by_weight: 38 },
-      distance_per_stop_m: 1441.4,
-      distance_per_kg_m: 2.4,
+      collected_volume_litres: 45000,
+      collected_weight_kg: 22500,
+      unserved_count: 424,
+      recommended_trucks: 99,
+      fleet_basis: { ceil_by_volume: 99, ceil_by_weight: 60 },
+      distance_per_stop_m: 2064.0,
+      distance_per_kg_m: 3.1,
     }),
   ],
   gains: {
-    selection_gain_m: -32130,
-    routing_gain_m: 205338,
-    total_gain_m: 173208,
+    selection_gain_m: -72398,
+    routing_gain_m: 456846,
+    total_gain_m: 384448,
   },
   optimised_determinism: {
     runs: 5,
     mode: "identical",
-    distance_m_median: 57657.0,
-    distance_m_min: 57657,
-    distance_m_max: 57657,
+    distance_m_median: 70175.0,
+    distance_m_min: 70175,
+    distance_m_max: 70175,
+  },
+  fleet_budget: {
+    vehicle_type_id: "demo_truck",
+    trucks: 99,
+    cost_eur_per_day: 49500,
+    cost_eur_per_year: 9900000,
   },
   distance_provenance: "haversine_straight_line_derived",
   assumptions: [
@@ -279,8 +343,42 @@ export const comparisonMedianOfRunsFixture: ComparisonResponse = {
   optimised_determinism: {
     runs: 5,
     mode: "median_of_runs",
-    distance_m_median: 57657.0,
-    distance_m_min: 57100,
-    distance_m_max: 58300,
+    distance_m_median: 70175.0,
+    distance_m_min: 69800,
+    distance_m_max: 70900,
   },
+};
+
+/**
+ * §5.2.3 DaysToFullResponse (v3) — synthetic fixture mirroring the observed
+ * real-CSV run (docs/PROGRESS.md M15: median 48.3 d, 1,213/1,338 series).
+ * All values [predicted] from fill history; caveats are the API's own
+ * labelled assumption strings.
+ */
+export const daysToFullFixture: DaysToFullResponse = {
+  method: "median_positive_pair_rate",
+  stats: {
+    series_total: 1338,
+    series_with_estimate: 1213,
+    median_days: 48.3,
+    mean_days: 113.0,
+    min_days: 0,
+    max_days: 2120,
+  },
+  series: [
+    {
+      location_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      material_type: "brown",
+      last_date: "2026-09-30",
+      last_fill_pct: 60,
+      last_is_overfull: false,
+      rate_pct_per_day: 0.83,
+      days_to_full: 48.2,
+      reason: null,
+    },
+  ],
+  assumptions: [
+    "[observed] median reading gap 28 d",
+    "[predicted] constant fill rate assumed between readings; decreasing readings (probable emptying events) are excluded from the rate — the data has no collection events",
+  ],
 };

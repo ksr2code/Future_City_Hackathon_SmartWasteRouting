@@ -61,6 +61,9 @@ export default function App() {
   const [configError, setConfigError] = useState<string | null>(null);
   const [policyOverride, setPolicyOverride] = useState<PolicyConfigOverride>({});
   const [routingOverride, setRoutingOverride] = useState<RoutingConfigOverride>({});
+  // Bumped by the config editor's Recalculate button — re-runs the
+  // auto-computed overview flows with the current overrides (M15).
+  const [recalculateKey, setRecalculateKey] = useState(0);
 
   // Synthetic/demo markers from the latest route response (§5.3).
   const [routeAssumptions, setRouteAssumptions] = useState<string[] | null>(null);
@@ -204,6 +207,7 @@ export default function App() {
               summaryLoading={summaryLoading}
               summaryError={summaryError}
               datasetVersion={datasetVersion}
+              recalculateKey={recalculateKey}
               onDemoLoaded={handleUploaded}
             />
           </ErrorBoundary>
@@ -248,12 +252,14 @@ export default function App() {
           <ErrorBoundary label="Demo config">
             <ConfigEditor
               config={config}
+              lang={lang}
               loading={configLoading}
               error={configError}
               policyOverride={policyOverride}
               routingOverride={routingOverride}
               onPolicyChange={setPolicyOverride}
               onRoutingChange={setRoutingOverride}
+              onRecalculate={() => setRecalculateKey((v) => v + 1)}
             />
           </ErrorBoundary>
         </div>

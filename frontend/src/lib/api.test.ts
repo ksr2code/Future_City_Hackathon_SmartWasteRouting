@@ -151,19 +151,29 @@ describe("api client (§5)", () => {
       "naive_sweep_selected",
       "ortools",
     ]);
-    expect(comparison.scenarios[0]?.distance_m).toBe(230865);
-    expect(comparison.scenarios[2]?.distance_m).toBe(57657);
+    expect(comparison.scenarios[0]?.distance_m).toBe(454623);
+    expect(comparison.scenarios[2]?.distance_m).toBe(70175);
     // Nullable per-metrics are preserved, never coerced.
-    expect(comparison.scenarios[2]?.distance_per_kg_m).toBe(2.4);
+    expect(comparison.scenarios[2]?.distance_per_kg_m).toBe(3.1);
     // Gains, incl. the honestly-negative selection gain.
-    expect(comparison.gains.selection_gain_m).toBe(-32130);
-    expect(comparison.gains.total_gain_m).toBe(173208);
+    expect(comparison.gains.selection_gain_m).toBe(-72398);
+    expect(comparison.gains.total_gain_m).toBe(384448);
+    // v3 per-scenario cost fields + fleet budget (§5.2.2 v3).
+    expect(comparison.scenarios[2]?.cost_eur_per_day).toBe(1500);
+    expect(comparison.scenarios[2]?.cost_eur_per_year).toBe(300000);
+    expect(comparison.scenarios[2]?.travel_time_mode).toBe("fixed_per_leg");
+    expect(comparison.fleet_budget).toEqual({
+      vehicle_type_id: "demo_truck",
+      trucks: 99,
+      cost_eur_per_day: 49500,
+      cost_eur_per_year: 9900000,
+    });
     expect(comparison.optimised_determinism).toEqual({
       runs: 5,
       mode: "identical",
-      distance_m_median: 57657.0,
-      distance_m_min: 57657,
-      distance_m_max: 57657,
+      distance_m_median: 70175.0,
+      distance_m_min: 70175,
+      distance_m_max: 70175,
     });
     expect(comparison.distance_provenance).toBe("haversine_straight_line_derived");
   });
