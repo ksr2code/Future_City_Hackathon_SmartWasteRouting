@@ -108,3 +108,17 @@ async def days_to_full() -> schemas.DaysToFullResponse:
     """§5.2.3 days-to-full estimates per series from fill history only;
     404 without a dataset (§5.1)."""
     return services.days_to_full()
+
+
+@router.post("/scenarios", response_model=schemas.ScenarioResponse)
+async def scenarios(request: schemas.ScenarioRequest) -> schemas.ScenarioResponse:
+    """§5.2.4 parameterised what-if: cost AND service level reported
+    together; 404 without a dataset (§5.1/§5.3)."""
+    return services.run_scenarios(request)
+
+
+@router.post("/simulation", response_model=schemas.SimulationResponse)
+async def simulation(request: schemas.SimulationRequest) -> schemas.SimulationResponse:
+    """§5.2.5 deterministic daily replay of both strategies; 404 without a
+    dataset (§5.1/§5.3)."""
+    return services.run_simulation(request)

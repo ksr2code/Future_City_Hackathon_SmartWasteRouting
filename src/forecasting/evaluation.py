@@ -9,8 +9,9 @@ Numeric metrics: MAE/RMSE in percentage points, computed **only where the
 truth is numeric AND a prediction exists**; rows whose truth is the
 ``overfull`` token are excluded from numeric metrics and never coerced
 (§2.4). Coverage honesty: every split reports the share of truths that are
-overfull and the number of cases no baseline could forecast (overfull-only
-history).
+overfull and the number of cases the baseline could not forecast
+(persistence: overfull-only history; rate v4: additionally no usable rate —
+§2.3 returns no numeric prediction then).
 
 State confusion: "full-or-overfull vs rest" at a configurable threshold
 (default 80 percent — **[demo assumption]**, not from the brief). Positive:
@@ -83,7 +84,7 @@ class SplitMetrics:
     n_numeric_truth: int
     n_overfull_truth: int
     overfull_truth_share: float  # n_overfull_truth / n_cases (0.0 when empty)
-    n_skipped_no_numeric_history: int
+    n_skipped_no_prediction: int
     n_scored_numeric: int  # numeric truth AND prediction available
     mae_pct: float | None
     rmse_pct: float | None
@@ -155,7 +156,7 @@ def evaluate_split(
         n_numeric_truth=n_numeric_truth,
         n_overfull_truth=n_overfull_truth,
         overfull_truth_share=(n_overfull_truth / len(split_cases)) if split_cases else 0.0,
-        n_skipped_no_numeric_history=n_skipped,
+        n_skipped_no_prediction=n_skipped,
         n_scored_numeric=len(absolute_errors_pct),
         mae_pct=statistics.fmean(absolute_errors_pct) if absolute_errors_pct else None,
         rmse_pct=(math.sqrt(statistics.fmean(squared_errors_pct)) if squared_errors_pct else None),

@@ -342,11 +342,12 @@ def test_collected_volume_is_fill_pct_times_container_volume() -> None:
 
 def test_collected_weight_is_volume_times_density() -> None:
     """weight_kg = round(collected_volume_litres * density): 2,700 L x
-    0.5 kg/L = 1,350 kg with the uniform demo density."""
+    0.40 kg/L = 1,080 kg with the uniform demo density ([literature] §4.6
+    v4, AVV 20 01 02)."""
     candidates = [make_candidate("loc-a", "brown", 90.0)]
     problem = _problem(candidates)
     stop = problem.stops[0]
-    assert stop.collected_weight_kg(CONFIG.densities_kg_per_litre["brown"]) == 1350
+    assert stop.collected_weight_kg(CONFIG.densities_kg_per_litre["brown"]) == 1080
 
 
 def test_full_container_collects_full_volume_and_half_weight() -> None:

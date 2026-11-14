@@ -26,6 +26,7 @@ from src.api.errors import ApiError, DemoDatasetMissingError
 from src.api.spa import install_spa
 from src.api.state import NoDatasetError
 from src.collection.policy import PolicyConfigError
+from src.collection.simulation import SimulationConfigError
 from src.routing.schemas import RoutingSchemaError
 from src.routing.solver import RoutingSolverError
 
@@ -65,11 +66,14 @@ def create_app(dist_dir: Path | None = None) -> FastAPI:
 
     @application.exception_handler(PolicyConfigError)
     @application.exception_handler(RoutingSchemaError)
+    @application.exception_handler(SimulationConfigError)
     async def config_validation_handler(
-        _request: Request, exc: PolicyConfigError | RoutingSchemaError
+        _request: Request,
+        exc: PolicyConfigError | RoutingSchemaError | SimulationConfigError,
     ) -> JSONResponse:
-        """Invalid §3.1/§4.6 overrides -> 422 with the domain validation message
-        (contract §5.3: validated by constructing the config objects)."""
+        """Invalid §3.1/§4.6/§5.2.4-5 overrides -> 422 with the domain
+        validation message (contract §5.3: validated by constructing the
+        config objects)."""
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @application.exception_handler(RoutingSolverError)

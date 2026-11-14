@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from src.routing.demo_config import DEMO_DENSITY_SOURCE_LABEL
 from tests.api.conftest import SMALL_CSV, VALID_CSV, upload_csv
 
 
@@ -204,7 +205,10 @@ class TestSummaryAndContainers:
 
 
 class TestConfig:
-    def test_config_returns_46_demo_defaults(self, client: TestClient) -> None:
+    def test_config_returns_v4_demo_defaults(self, client: TestClient) -> None:
+        """§4.6 v4 defaults: densities are [literature] 0.4; the two new
+        cycle knobs (containers_per_series, frequency_days) are [demo
+        assumption] Q11/Q10; all other values unchanged from v3."""
         response = client.get("/api/config")
         assert response.status_code == 200
         body = response.json()
@@ -216,9 +220,9 @@ class TestConfig:
         routing = body["routing"]
         assert routing["container_volume_litres"] == 3000  # [representative §4.6 v3]
         assert routing["densities_kg_per_litre"] == {
-            "brown": 0.5,
-            "green": 0.5,
-            "white": 0.5,
+            "brown": 0.4,  # [literature §4.6 v4 — AVV 20 01 02]
+            "green": 0.4,
+            "white": 0.4,
         }
         assert routing["vehicle_volume_capacity_litres"] == 12_000
         assert routing["vehicle_weight_capacity_kg"] == 10_000
@@ -238,6 +242,8 @@ class TestConfig:
         assert routing["detour_factor"] == 1.4
         assert routing["solver_solution_limit"] == 200  # §4.6 v2 primary stop
         assert routing["solver_time_limit_s"] == 30.0  # §4.6 v2 safety cap only
+        assert routing["containers_per_series"] == 1  # §4.2/§4.6 v4 [demo assumption Q11]
+        assert routing["frequency_days"] == 28  # §4.7/§5.2.4 cycle [demo assumption Q10]
 
     def test_config_sources_map_and_assumption_fields_match_v3(self, client: TestClient) -> None:
         """§4.6 v3/§5.2: every routing field carries a per-field source;
@@ -262,6 +268,15 @@ class TestConfig:
             "operating_days_per_year",
         }
         labelled = set(body["assumption_fields"])
-        # Representative fields are NOT demo assumptions (contract §5.2 v3).
+        # §4.6 v4: the density is literature-sourced — neither a demo
+        # assumption nor a representative field, so it sits in neither set.
+        literature = {name for name, source in sources.items() if source == "literature"}
+        assert literature == {"densities_kg_per_litre"}
+        assert sources["densities_kg_per_litre"] == "literature"
+        assert body["source_labels"]["densities_kg_per_litre"] == DEMO_DENSITY_SOURCE_LABEL
+        # Representative fields are NOT demo assumptions (contract §5.2 v3),
+        # and literature fields are labelled verbatim via source_labels only.
         assert representative.isdisjoint(labelled)
-        assert (policy_fields | {"horizon_days"} | routing_fields) - representative == labelled
+        assert literature.isdisjoint(labelled)
+        all_fields = policy_fields | {"horizon_days"} | routing_fields
+        assert all_fields - representative - literature == labelled

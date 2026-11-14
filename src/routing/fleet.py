@@ -21,7 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.routing.schemas import RoutingProblem, RoutingSchemaError, VehicleType
+from src.routing.schemas import (
+    RoutingProblem,
+    RoutingSchemaError,
+    VehicleType,
+    effective_collected_volume_litres,
+    effective_collected_weight_kg,
+)
 
 __all__ = [
     "FleetBasis",
@@ -83,15 +89,14 @@ def fleet_recommendation(
 
 def demand_totals(problem: RoutingProblem) -> tuple[int, int]:
     """Total demand volume/weight over **all** stops of the problem (litres,
-    kilograms), using per-material densities from the routing config — the
-    same derived quantities the solver loads onto vehicles (:class:`Stop`)."""
+    kilograms) — the effective §4.2 v4 quantities (per-material densities from
+    the routing config plus the ``containers_per_series`` multiplier), the
+    same quantities the solver loads onto vehicles."""
     total_volume = 0
     total_weight = 0
     for stop in problem.stops:
-        total_volume += stop.collected_volume_litres
-        total_weight += stop.collected_weight_kg(
-            problem.config.densities_kg_per_litre[stop.material_type]
-        )
+        total_volume += effective_collected_volume_litres(stop, problem.config)
+        total_weight += effective_collected_weight_kg(stop, problem.config)
     return total_volume, total_weight
 
 

@@ -56,10 +56,40 @@ class TestComparison:
 
     def test_scenarios_in_fixed_contract_order(self, comparison_body: dict) -> None:
         methods = [scenario["method"] for scenario in comparison_body["scenarios"]]
-        assert methods == ["naive_sweep_all", "naive_sweep_selected", "ortools"]
+        assert methods == [
+            "naive_fixed_frequency",
+            "naive_sweep_all",
+            "naive_sweep_selected",
+            "ortools",
+        ]
+
+    def test_fixed_frequency_row_on_valid_csv(self, comparison_body: dict) -> None:
+        """§4.7 v4 status quo on VALID_CSV: all 5 series are DUE — last
+        emptying Jan/Feb 2026, as_of 2026-09-30 gaps 240..267 d >= 28.
+        Persistence fills 90 / 10 (green: last numeric before the overfull
+        token) / 40 / 80 / 100 → 2700 + 300 + 1200 + 2400 + 3000 = 9600 L;
+        x 0.40 kg/l = 3840 kg; all stops fit one demo truck in-shift
+        (flat-mode packing §4.4)."""
+        row = comparison_body["scenarios"][0]
+        assert row["method"] == "naive_fixed_frequency"
+        assert row["status"] == "complete"
+        assert row["stops_total"] == row["stops_served"] == 5
+        assert row["unserved_count"] == 0
+        assert row["vehicles_used"] == 1
+        assert row["collected_volume_litres"] == 2700 + 300 + 1200 + 2400 + 3000  # 9600 L
+        assert row["collected_weight_kg"] == 3840  # 9600 L x 0.40 kg/l
+
+    def test_observed_service_anchor(self, comparison_body: dict) -> None:
+        """§4.7 v4/§5.2.4 anchor on VALID_CSV: 1 numeric-100 (loc-b white)
+        + 1 overfull (loc-a green) of 10 rows = 2/10 x 100 = 20.0 %;
+        max numeric fill = 100.0 (loc-b white)."""
+        anchor = comparison_body["observed_service_anchor"]
+        assert anchor["basis"] == "observed_emptying_records"
+        assert anchor["share_full_or_overfull_pct"] == 20.0
+        assert anchor["max_fill_pct"] == 100.0
 
     def test_sweep_all_scenario_shape(self, comparison_body: dict) -> None:
-        sweep_all = comparison_body["scenarios"][0]
+        sweep_all = comparison_body["scenarios"][1]  # v4 order: fixed_frequency is [0]
         assert sweep_all["status"] in {"complete", "incomplete"}
         assert sweep_all["stops_total"] == 5  # all VALID_CSV series, no policy filter
         assert sweep_all["stops_served"] + sweep_all["unserved_count"] == (sweep_all["stops_total"])
@@ -77,7 +107,7 @@ class TestComparison:
 
     def test_sweep_selected_matches_the_optimised_selection(self, comparison_body: dict) -> None:
         scenarios = comparison_body["scenarios"]
-        sweep_selected, ortools = scenarios[1], scenarios[2]
+        sweep_selected, ortools = scenarios[2], scenarios[3]  # v4 order
         # Selection is deterministic: the median optimised run selected
         # loc-a brown/green/white fills 90/80/100 + the overfull green; only
         # loc-a white (40) is skipped below threshold 80 (§3.1 default).
@@ -106,7 +136,7 @@ class TestComparison:
                 assert scenario["distance_per_kg_m"] is None
 
     def test_gains_decompose_the_scenario_distances(self, comparison_body: dict) -> None:
-        sweep_all, sweep_selected, ortools = comparison_body["scenarios"]
+        sweep_all, sweep_selected, ortools = comparison_body["scenarios"][1:]  # v4 order
         gains = comparison_body["gains"]
         assert gains["selection_gain_m"] == (sweep_all["distance_m"] - sweep_selected["distance_m"])
         if ortools["status"] in {"optimal", "feasible"}:
@@ -145,7 +175,7 @@ class TestComparison:
     def test_fleet_budget_matches_the_ortools_recommendation(self, comparison_body: dict) -> None:
         """§5.2.2 fleet_budget: the ortools fleet recommendation priced at the
         §4.6 v3 rates (decision ③; [predicted] derived, never invoiced)."""
-        ortools = comparison_body["scenarios"][2]
+        ortools = comparison_body["scenarios"][3]  # v4 order: fixed_frequency is [0]
         budget = comparison_body["fleet_budget"]
         assert set(budget) == {
             "vehicle_type_id",

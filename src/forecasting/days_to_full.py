@@ -1,57 +1,67 @@
-"""Days-to-full estimates (M15) — docs/contracts.md §5.2.3.
+"""Days-to-full estimates v2 (M16) — docs/contracts.md §5.2.3, semantics §1.5.
 
-For every series ``(location_id, material_type)`` the fill history is turned
-into an estimated number of days until the container reaches 100 percent,
-using only information in the readings (nothing about container volume,
-emptying events or future behaviour exists in the data):
+One row is one **emptying event** [representative-stated, §1.5]; every
+estimate below is derived from emptying records only. For every series
+``(location_id, material_type)``:
 
-- ``rate_pct_per_day`` is the median over **consecutive numeric reading
-  pairs with a positive delta** of ``Δfill_pct / Δdays``. Pairs are taken in
-  date order; overfull readings break pairs (never coerced, contract §1.1)
-  and drops — probable emptyings [observed: no collection events in the
-  data] are excluded, never treated as negative accumulation. The positive
-  rates are the subset of :func:`collect_numeric_rates_pct_per_day` with a
-  value > 0 (a skipped non-positive gap cannot produce a positive rate).
-- ``days_to_full = max(0, (100 - last numeric fill) / rate)``, rounded to
-  1 decimal place (Python ``round``).
+- ``rate_pct_per_day`` is the §1.5 accumulation rate: the median over
+  records ``r_i`` (i >= 2) with ``interval_days = date_i - date_{i-1} > 0``
+  and numeric ``fill_i`` of ``fill_i / interval_days`` — never a
+  ``Δfill/Δdays`` velocity between records. Overfull records never enter
+  the numeric median.
+- ``median_interval_days`` is the median over consecutive record intervals
+  > 0 (date-based; overfull records participate).
+- ``days_to_full = target_pct / rate`` (1 d.p.). Model assumption: the
+  container refills from 0 after each emptying — echoed in ``assumptions``.
+- ``predicted_full_date = last_emptying_date + round(days_to_full)`` —
+  never clamped, so it may lie in the past ("overdue").
+- ``is_lower_bound`` is True iff any rate candidate (record ``r_i``, i >= 2,
+  interval > 0) is the overfull token or numeric ``fill_i >= 100`` (§1.5:
+  censored lower bounds — true demand >= observed; never coerced). A
+  numeric-100 or overfull record with a zero preceding interval is not a
+  candidate and does not flag the estimate.
 
-Reason codes — no estimate is ever fabricated:
+Reason codes — no estimate is ever fabricated; ``days_to_full`` is
+``None`` exactly when ``reason`` is not ``None``:
 
-- ``already_full``: the last reading is the overfull token or numeric 100 →
-  ``days_to_full = 0.0`` exactly (a state fact, not an estimate). This is
-  the one case where a ``reason`` is set **and** ``days_to_full`` is present,
-  as pinned by contract §5.2.3; for every other reason ``days_to_full`` is
-  ``None``.
-- ``no_numeric_history``: fewer than 2 numeric readings → no rate possible.
-- ``no_positive_rate``: numeric history exists but no increasing pair.
+- ``not_enough_records``: fewer than 2 records in the series.
+- ``zero_interval_only``: >= 2 records but no positive interval.
+- ``no_numeric_fill``: candidates exist but none has a numeric fill.
+- ``zero_rate``: the numeric candidates' median rate is exactly 0 pp/day
+  (all contributing fills are 0) — ``target_pct / rate`` is undefined, so
+  no finite estimate exists. Contract deviation: §5.2.3 lists three
+  reasons; this fourth value is surfaced instead of fabricating a number
+  (flagged for architect review).
 
-Precedence is ``already_full`` first (a full container needs no rate),
-then ``no_numeric_history``, then ``no_positive_rate``.
+Aggregate ``stats``/``stats_by_material`` cover only series with an
+estimate; ``lower_bound_share_pct`` is the share of estimates flagged
+``is_lower_bound`` (1 d.p.); all days fields and the share are ``None``
+when no series has an estimate. All three material keys are always present
+(same convention as ``rows_per_material``, §1.3).
 
-Aggregate stats cover only series with a ``days_to_full`` value (including
-``already_full`` zeros, which count towards ``series_with_estimate``); all
-four aggregate days fields are ``None`` when no series has a value.
-
-Deterministic: readings are sorted by date internally (stable sort; I1
+Deterministic: records are sorted by date internally (stable sort; I1
 guarantees unique dates within a series) and series are ordered by
-``(location_id, material_type)``. Same input ⇒ identical output.
+``(location_id, material_type)``. Same input + ``target_pct`` ⇒ identical
+output.
 """
 
 from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from datetime import date
-from itertools import pairwise
+from datetime import date, timedelta
 from typing import Literal, TypeAlias
 
 from src.data.schema import Dataset, MaterialType, ReadingRecord
 from src.forecasting.features import (
-    collect_numeric_rates_pct_per_day,
+    collect_fill_at_emptying_rates_pct_per_day,
+    collect_positive_interval_days,
+    collect_rate_candidates,
     group_by_series,
 )
 
 __all__ = [
+    "DEFAULT_TARGET_PCT",
     "DaysToFullReason",
     "DaysToFullResult",
     "DaysToFullStats",
@@ -59,48 +69,56 @@ __all__ = [
     "build_days_to_full",
 ]
 
-METHOD: Literal["median_positive_pair_rate"] = "median_positive_pair_rate"
+METHOD: Literal["fill_at_emptying_rate"] = "fill_at_emptying_rate"
+
+DEFAULT_TARGET_PCT = 90  # percent [demo assumption — slide mockup]; parameter 1..100
+FULL_FILL_PCT = 100  # percent; numeric 100 is a censored lower bound (§1.5)
+MATERIALS: tuple[MaterialType, ...] = ("brown", "green", "white")
 
 DaysToFullReason: TypeAlias = Literal[
-    "no_numeric_history",
-    "no_positive_rate",
-    "already_full",
+    "not_enough_records",
+    "zero_interval_only",
+    "no_numeric_fill",
+    "zero_rate",
 ]
 
-REASON_NO_NUMERIC_HISTORY: DaysToFullReason = "no_numeric_history"
-REASON_NO_POSITIVE_RATE: DaysToFullReason = "no_positive_rate"
-REASON_ALREADY_FULL: DaysToFullReason = "already_full"
-
-FULL_FILL_PCT = 100  # percent; numeric 100 is full, like the overfull token (loader range 0-100)
+REASON_NOT_ENOUGH_RECORDS: DaysToFullReason = "not_enough_records"
+REASON_ZERO_INTERVAL_ONLY: DaysToFullReason = "zero_interval_only"
+REASON_NO_NUMERIC_FILL: DaysToFullReason = "no_numeric_fill"
+REASON_ZERO_RATE: DaysToFullReason = "zero_rate"
 
 
 @dataclass(frozen=True)
 class SeriesDaysToFull:
-    """Days-to-full estimate of one series (contract §5.2.3).
+    """Days-to-full estimate of one series (contract §5.2.3 v2).
 
     Units: ``last_fill_pct``/``rate_pct_per_day`` in percent and percentage
-    points per day, ``days_to_full`` in days (1 d.p.). ``last_fill_pct`` is
-    ``None`` exactly when ``last_is_overfull`` (invariant I3). ``days_to_full``
-    is ``None`` exactly when ``reason`` is set and is not ``already_full``
-    (``already_full`` keeps ``days_to_full = 0.0``).
+    points per day, ``median_interval_days``/``days_to_full`` in days (1 d.p.
+    for ``days_to_full``). ``last_fill_pct`` is ``None`` exactly when
+    ``last_is_overfull`` (invariant I3). ``days_to_full``/``predicted_full_
+    date`` are ``None`` exactly when ``reason`` is set.
     """
 
     location_id: str
     material_type: MaterialType
-    last_date: date
-    last_fill_pct: int | None  # percent; None iff the last reading is the overfull token
+    last_emptying_date: date  # latest record date of the series
+    last_fill_pct: int | None  # percent; None iff the last record is the overfull token
     last_is_overfull: bool
-    rate_pct_per_day: float | None  # median positive consecutive-pair rate; None if no pair
-    days_to_full: float | None  # days, 1 d.p.; None unless estimated or already_full
-    reason: DaysToFullReason | None  # None iff days_to_full is an estimate
+    rate_pct_per_day: float | None  # §1.5 median fill-at-emptying rate; None if no candidate
+    median_interval_days: float | None  # median consecutive interval > 0; None if none
+    days_to_full: float | None  # days = target_pct / rate, 1 d.p.; None iff reason set
+    predicted_full_date: date | None  # last_emptying_date + round(days_to_full); never clamped
+    is_lower_bound: bool  # any rate candidate >= 100 or overfull (§1.5 censored)
+    reason: DaysToFullReason | None  # None iff days_to_full present
 
 
 @dataclass(frozen=True)
 class DaysToFullStats:
-    """Aggregate stats over series with a ``days_to_full`` value (§5.2.3).
+    """Aggregate stats over series with an estimate only (§5.2.3 v2).
 
     Days fields are exact aggregates (not re-rounded) of the per-series
-    1-d.p. values; all four are ``None`` when no series has a value.
+    1-d.p. values; ``lower_bound_share_pct`` is rounded to 1 d.p.; all five
+    estimate fields are ``None`` when no series has a value.
     """
 
     series_total: int
@@ -109,135 +127,131 @@ class DaysToFullStats:
     mean_days: float | None
     min_days: float | None
     max_days: float | None
+    lower_bound_share_pct: float | None  # % of estimates flagged is_lower_bound, 1 d.p.
 
 
 @dataclass(frozen=True)
 class DaysToFullResult:
-    """Full days-to-full output (contract §5.2.3).
+    """Full days-to-full output (contract §5.2.3 v2).
 
-    ``method`` is fixed to the contract value; ``assumptions`` carries the
-    required caveats with their provenance labels (observed gap is computed
-    from this dataset, not hardcoded from the profile).
+    ``method``/``target_pct`` are the contract values; ``assumptions`` carries
+    the mandatory §1.5 caveat plus the model/labelling assumptions.
     """
 
-    method: Literal["median_positive_pair_rate"]
+    method: Literal["fill_at_emptying_rate"]
+    target_pct: int
     stats: DaysToFullStats
+    stats_by_material: dict[MaterialType, DaysToFullStats]
     series: list[SeriesDaysToFull]
     assumptions: list[str]
 
 
-def _median_positive_rate_pct_per_day(readings: list[ReadingRecord]) -> float | None:
-    """Median rate (pp/day) over consecutive numeric pairs with positive delta.
+def build_days_to_full(dataset: Dataset, target_pct: int = DEFAULT_TARGET_PCT) -> DaysToFullResult:
+    """Days-to-full for every series of a dataset (contract §5.2.3 v2).
 
-    Reuses the §2.2 pair logic (:func:`collect_numeric_rates_pct_per_day`):
-    date-ordered pairs, overfull readings break pairs, gaps of 0 days are
-    skipped (I1 makes them unreachable in valid data). Filtering the returned
-    rates to > 0 is exactly "positive delta" because every kept pair has a
-    strictly positive gap.
+    ``target_pct`` must lie in 1..100 percent (validated). Deterministic
+    order and values; an empty dataset yields ``series_total`` 0 with all
+    estimate fields ``None``.
     """
-    positive = [rate for rate in collect_numeric_rates_pct_per_day(readings) if rate > 0]
-    return statistics.median(positive) if positive else None
-
-
-def _observed_median_gap_days(dataset: Dataset) -> int | float | None:
-    """Median gap in days between consecutive readings of a series (§14 grain).
-
-    Same definition as docs/data_profile.md §14: a **pooled** median over ALL
-    consecutive within-series gaps in date order (overfull rows included —
-    gaps use dates, not fill values; 10,363 gaps for the real CSV = 11,701
-    rows - 1,338 series first readings). Verified to reproduce the profile's
-    28 d on the real CSV (2026-11-14); it is deliberately *not* the
-    per-series median gap, which §14 reports separately (median 35 d).
-    ``None`` when no series has a gap.
-    """
-    gaps: list[int] = []
-    for _key, readings in sorted(group_by_series(dataset.readings).items()):
-        ordered = sorted(readings, key=lambda reading: reading.date)
-        gaps.extend(
-            (current.date - previous.date).days
-            for previous, current in pairwise(ordered)
-            if current.date > previous.date
+    if not 1 <= target_pct <= 100:
+        raise ValueError(f"target_pct must be in 1..100 percent, got {target_pct}")
+    series = [
+        _estimate_series(location_id, material_type, readings, target_pct)
+        for (location_id, material_type), readings in sorted(
+            group_by_series(dataset.readings).items()
         )
-    return statistics.median(gaps) if gaps else None
-
-
-def _build_assumptions(dataset: Dataset) -> list[str]:
-    """Contract §5.2.3 caveat labels, gap computed from the dataset itself."""
-    assumptions = [
-        "days_to_full values are predictions from fill history only [predicted]",
-        "each estimate assumes a constant fill rate and no emptying between readings [assumption]",
     ]
-    median_gap = _observed_median_gap_days(dataset)
-    gap_label = (
-        f"median reading gap {median_gap:g} d [observed]"
-        if median_gap is not None
-        else "reading gaps irregular; no median gap computable [observed]"
+    return DaysToFullResult(
+        method=METHOD,
+        target_pct=target_pct,
+        stats=_build_stats(series),
+        stats_by_material={
+            material: _build_stats([row for row in series if row.material_type == material])
+            for material in MATERIALS
+        },
+        series=series,
+        assumptions=_build_assumptions(target_pct),
     )
-    assumptions.append(gap_label)
-    return assumptions
 
 
 def _estimate_series(
     location_id: str,
     material_type: MaterialType,
     readings: list[ReadingRecord],
+    target_pct: int,
 ) -> SeriesDaysToFull:
     """One series' days-to-full row with contract §5.2.3 reason precedence."""
     ordered = sorted(readings, key=lambda reading: reading.date)
     last = ordered[-1]
-    n_numeric = sum(1 for reading in ordered if reading.fill_level_pct is not None)
-    rate = _median_positive_rate_pct_per_day(ordered)
+    candidates = collect_rate_candidates(ordered)
+    rates = collect_fill_at_emptying_rates_pct_per_day(ordered)
+    intervals = collect_positive_interval_days(ordered)
+    is_lower_bound = _is_lower_bound(candidates)
+    rate = statistics.median(rates) if rates else None
+    median_interval = statistics.median(intervals) if intervals else None
 
-    if last.is_overfull or last.fill_level_pct == FULL_FILL_PCT:
-        reason: DaysToFullReason | None = REASON_ALREADY_FULL
-        days_to_full: float | None = 0.0
-    elif n_numeric < 2:
-        reason = REASON_NO_NUMERIC_HISTORY
-        days_to_full = None
+    reason: DaysToFullReason | None
+    days_to_full: float | None
+    predicted_full_date: date | None
+    if len(ordered) < 2:
+        reason, days_to_full, predicted_full_date = REASON_NOT_ENOUGH_RECORDS, None, None
+    elif not candidates:
+        reason, days_to_full, predicted_full_date = REASON_ZERO_INTERVAL_ONLY, None, None
     elif rate is None:
-        reason = REASON_NO_POSITIVE_RATE
-        days_to_full = None
+        reason, days_to_full, predicted_full_date = REASON_NO_NUMERIC_FILL, None, None
+    elif rate == 0:
+        # target_pct / 0 undefined — never fabricate a finite estimate.
+        reason, days_to_full, predicted_full_date = REASON_ZERO_RATE, None, None
     else:
         reason = None
-        assert last.fill_level_pct is not None  # not overfull (I3), so numeric
-        days_to_full = round(max(0.0, (FULL_FILL_PCT - last.fill_level_pct) / rate), 1)
+        days_to_full = round(target_pct / rate, 1)
+        predicted_full_date = last.date + timedelta(days=round(days_to_full))
 
     return SeriesDaysToFull(
         location_id=location_id,
         material_type=material_type,
-        last_date=last.date,
+        last_emptying_date=last.date,
         last_fill_pct=last.fill_level_pct,
         last_is_overfull=last.is_overfull,
         rate_pct_per_day=rate,
+        median_interval_days=median_interval,
         days_to_full=days_to_full,
+        predicted_full_date=predicted_full_date,
+        is_lower_bound=is_lower_bound,
         reason=reason,
     )
 
 
-def build_days_to_full(dataset: Dataset) -> DaysToFullResult:
-    """Days-to-full for every series of a dataset (contract §5.2.3).
+def _is_lower_bound(candidates: list[tuple[ReadingRecord, int]]) -> bool:
+    """True iff any rate candidate is overfull or numeric fill >= 100 (§1.5)."""
+    return any(
+        record.is_overfull
+        or (record.fill_level_pct is not None and record.fill_level_pct >= FULL_FILL_PCT)
+        for record, _interval_days in candidates
+    )
 
-    Deterministic order and values; an empty dataset yields ``series_total``
-    0 with all aggregate days fields ``None``.
-    """
-    series = [
-        _estimate_series(location_id, material_type, readings)
-        for (location_id, material_type), readings in sorted(
-            group_by_series(dataset.readings).items()
-        )
+
+def _build_stats(rows: list[SeriesDaysToFull]) -> DaysToFullStats:
+    """Aggregate over series with an estimate only; nulls when none exist."""
+    estimates = [row.days_to_full for row in rows if row.days_to_full is not None]
+    flagged = sum(1 for row in rows if row.days_to_full is not None and row.is_lower_bound)
+    return DaysToFullStats(
+        series_total=len(rows),
+        series_with_estimate=len(estimates),
+        median_days=float(statistics.median(estimates)) if estimates else None,
+        mean_days=statistics.fmean(estimates) if estimates else None,
+        min_days=min(estimates) if estimates else None,
+        max_days=max(estimates) if estimates else None,
+        lower_bound_share_pct=(round(100 * flagged / len(estimates), 1) if estimates else None),
+    )
+
+
+def _build_assumptions(target_pct: int) -> list[str]:
+    """Contract caveats: the mandatory §1.5 sentence plus model/labelling labels."""
+    return [
+        "fill at emptying shows how full the container was when the schedule "
+        "reached it — not how fast it would have filled [representative-stated §1.5]",
+        "rates additionally assume no unobserved emptying between records [assumption]",
+        "days_to_full assumes the container refills from 0 after each emptying [model assumption]",
+        f"target fill {target_pct}% [demo assumption — slide mockup]",
     ]
-    days_values = [row.days_to_full for row in series if row.days_to_full is not None]
-    stats = DaysToFullStats(
-        series_total=len(series),
-        series_with_estimate=len(days_values),
-        median_days=float(statistics.median(days_values)) if days_values else None,
-        mean_days=statistics.fmean(days_values) if days_values else None,
-        min_days=min(days_values) if days_values else None,
-        max_days=max(days_values) if days_values else None,
-    )
-    return DaysToFullResult(
-        method=METHOD,
-        stats=stats,
-        series=series,
-        assumptions=_build_assumptions(dataset),
-    )

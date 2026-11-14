@@ -1,11 +1,8 @@
-"""Real-CSV pins for M5 targets/features (regression; aggregate counts only).
+"""Real-CSV pins for M5 targets/features + v4 baselines (regression; aggregates only).
 
-Every pin is derivable from docs/data_profile.md observations:
-- total cases = rows - series = 11,701 - 1,338 = 10,363 (each series with n
-  readings contributes exactly n-1 cases);
-- remaining pins were produced by src.forecasting.report on the real CSV
-  (aggregate counts, no raw rows).
-The raw file is never printed; synthetic ids are rejected on this path.
+Every pin is derivable from docs/data_profile.md observations or from
+``src.forecasting.report`` / ``evaluate`` output (aggregate counts, no raw
+rows). The raw file is never printed; synthetic ids are rejected on this path.
 """
 
 from __future__ import annotations
@@ -14,7 +11,7 @@ import pytest
 
 from src.analytics.spatial import require_real_ids
 from src.data.loader import load_glass_fill_csv
-from src.forecasting.evaluation import assign_split
+from src.forecasting.evaluation import assign_split, evaluate
 from src.forecasting.features import FeatureRow
 from src.forecasting.targets import EvaluationCase, build_evaluation_cases
 from tests.helpers import require_real_csv_path
@@ -52,3 +49,33 @@ class TestRealCsvPins:
     def test_horizons_positive_and_features_attached(self, cases) -> None:
         assert all(c.horizon_days >= 1 for c in cases)
         assert all(isinstance(c.features, FeatureRow) for c in cases)
+
+
+class TestV4BaselinePins:
+    """Chronological-split headline pins, v4 rate method (§2.3).
+
+    Produced 2026-11-14 by ``evaluate`` on the real CSV (threshold 80,
+    numeric truths only); recorded in docs/model_card.md. Persistence is
+    unchanged from M5; rate (v4) now beats it on both splits.
+    """
+
+    def test_test_split_headline(self, cases) -> None:
+        by_method = evaluate(cases)
+        persistence = by_method["persistence"]["test"]
+        assert persistence.n_scored_numeric == 1_943
+        assert round(persistence.mae_pct, 3) == 22.764
+        assert round(persistence.rmse_pct, 3) == 30.475
+        rate = by_method["rate"]["test"]
+        assert rate.n_scored_numeric == 1_930
+        assert rate.n_skipped_no_prediction == 15
+        assert round(rate.mae_pct, 3) == 20.146
+        assert round(rate.rmse_pct, 3) == 25.857
+
+    def test_validation_split_headline(self, cases) -> None:
+        by_method = evaluate(cases)
+        assert round(by_method["persistence"]["validation"].mae_pct, 3) == 27.658
+        assert round(by_method["rate"]["validation"].mae_pct, 3) == 25.391
+
+    def test_v4_rate_beats_persistence_on_test_mae(self, cases) -> None:
+        by_method = evaluate(cases)
+        assert by_method["rate"]["test"].mae_pct < by_method["persistence"]["test"].mae_pct

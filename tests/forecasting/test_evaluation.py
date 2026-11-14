@@ -1,7 +1,8 @@
 """Evaluation tests — split boundaries, metrics, confusion (contract §2.4).
 
-Hand-built scenario at the default threshold 80 (persistence == rate here,
-since median_rate is None -> documented persistence fallback):
+Hand-built scenario at the default threshold 80 (all features lack a usable
+rate, so the rate method returns None per §2.3 v4 and is skipped; persistence
+covers the numbers):
 
 - case1 truth 60 pred 70        -> err +10, truth neg / pred neg -> tn
 - case2 truth 80 pred 80        -> err 0,   truth pos / pred pos -> tp
@@ -12,6 +13,7 @@ since median_rate is None -> documented persistence fallback):
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date
 
 from src.forecasting.baseline import forecast
@@ -23,10 +25,8 @@ SCENARIO_ABS_ERRORS = [10.0, 0.0, 50.0]
 SCENARIO_TP, SCENARIO_FP, SCENARIO_FN, SCENARIO_TN = 2, 1, 0, 1
 
 
-def _case(
-    truth_fill_pct: int | None, last_numeric: int | None, last_overfull: bool
-) -> EvaluationCase:
-    features = FeatureRow(
+def _features(last_numeric: int | None, last_overfull: bool) -> FeatureRow:
+    return FeatureRow(
         location_id="SYNTHETIC-f-x",
         material_type="brown",
         as_of_date=date(2026, 6, 1),
@@ -38,8 +38,15 @@ def _case(
         mean_numeric_fill_pct=float(last_numeric) if last_numeric is not None else None,
         max_numeric_fill_pct=last_numeric,
         overfull_share=0.5 if last_overfull else 0.0,
-        median_rate_pct_per_day=None,  # rate falls back to persistence
+        fill_at_emptying_rate_pct_per_day=None,  # no usable rate (§2.3 v4)
+        median_interval_days=None,
     )
+
+
+def _case(
+    truth_fill_pct: int | None, last_numeric: int | None, last_overfull: bool
+) -> EvaluationCase:
+    features = _features(last_numeric, last_overfull)
     return EvaluationCase(
         location_id=features.location_id,
         material_type=features.material_type,
@@ -77,7 +84,7 @@ class TestEvaluateSplit:
         assert metrics.n_numeric_truth == 3
         assert metrics.n_overfull_truth == 1
         assert metrics.overfull_truth_share == 0.25
-        assert metrics.n_skipped_no_numeric_history == 0
+        assert metrics.n_skipped_no_prediction == 0
         assert metrics.n_scored_numeric == 3
         assert metrics.mae_pct == sum(SCENARIO_ABS_ERRORS) / 3
         assert metrics.rmse_pct == math.sqrt(sum(e * e for e in SCENARIO_ABS_ERRORS) / 3)
@@ -99,14 +106,40 @@ class TestEvaluateSplit:
         cases = [*scenario_cases(), _case(30, None, True)]  # overfull-only history
         metrics = evaluate_split(cases, "persistence", "validation")
         assert metrics.n_cases == 5
-        assert metrics.n_skipped_no_numeric_history == 1
+        assert metrics.n_skipped_no_prediction == 1
         assert metrics.n_scored_numeric == 3  # numeric subset unchanged
 
-    def test_rate_equals_persistence_for_its_fallback_cases(self) -> None:
-        persistence = evaluate_split(scenario_cases(), "persistence", "validation")
-        rate = evaluate_split(scenario_cases(), "rate", "validation")
-        assert rate.mae_pct == persistence.mae_pct
-        assert rate.rmse_pct == persistence.rmse_pct
+    def test_rate_without_usable_rate_skips_all_cases(self) -> None:
+        # §2.3 v4: no usable rate ⇒ no numeric prediction — counted, not scored.
+        metrics = evaluate_split(scenario_cases(), "rate", "validation")
+        assert metrics.n_cases == 4
+        assert metrics.n_skipped_no_prediction == 4
+        assert metrics.n_scored_numeric == 0
+        assert metrics.mae_pct is None
+        assert metrics.rmse_pct is None
+        assert metrics.confusion.total == 0
+
+    def test_rate_with_usable_rate_is_scored(self) -> None:
+        # rate 3.0 pp/day x 20 d median interval = 60.0 predicted vs truth 60.
+        features = replace(
+            _features(70, False),
+            fill_at_emptying_rate_pct_per_day=3.0,
+            median_interval_days=20.0,
+        )
+        case = EvaluationCase(
+            location_id=features.location_id,
+            material_type=features.material_type,
+            as_of_date=features.as_of_date,
+            target_date=date(2026, 6, 15),
+            horizon_days=14,
+            truth_fill_pct=60,
+            truth_is_overfull=False,
+            features=features,
+        )
+        metrics = evaluate_split([case], "rate", "validation")
+        assert metrics.n_skipped_no_prediction == 0
+        assert metrics.n_scored_numeric == 1
+        assert metrics.mae_pct == 0.0  # 3.0 * 20 = 60 == truth
 
     def test_empty_split_yields_zeroed_metrics(self) -> None:
         metrics = evaluate_split([], "rate", "test")

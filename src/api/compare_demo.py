@@ -14,7 +14,11 @@ assumption], default ``PolicyConfig`` §3.1, synthetic demo geography §4.5 and
 the two naive area-sweep scenarios from ``src.routing.naive``. This module is
 CLI glue only: upload, the markdown rendering below, and argparse.
 
-The three §4.7 scenarios, in the fixed array order:
+The four §4.7 scenarios, in the fixed array order:
+- ``naive_fixed_frequency``: the §4.7 v4 status quo — only series **due**
+  under the fixed ``frequency_days`` cycle (as_of - last_emptying_date >= k;
+  no last date ⇒ due) in the same area-sweep order; the observed service
+  anchor is reported beside its cost (§4.7 v4).
 - ``naive_sweep_all``: ALL dataset series — no policy filter — simulated by
   ``src.routing.naive`` in the §4.7 area-sweep order (grid cells of
   ``SWEEP_CELL_SIZE_DEG`` ≈ 1 km [demo assumption], row-major, lexicographic
@@ -54,6 +58,7 @@ from src.api.services import (
 from src.api.services import run_comparison as run_comparison_core
 from src.routing.demo_config import (
     DEMO_COST_PER_TRUCK_DAY_EUR,
+    DEMO_DENSITY_SOURCE_LABEL,
     DEMO_OPERATING_DAYS_PER_YEAR,
     demo_vehicle_type,
 )
@@ -73,27 +78,33 @@ DETOUR_NOTE = (
 )
 
 V3_PARAMETERS_NOTE = (
-    "v3 parameter change (2026-11-14): the comparison now runs on the §4.6 v3 "
-    "representative parameters — container_volume_litres=3000 [representative], "
-    "stop_service_minutes=5 [representative], travel_time_mode=fixed_per_leg with "
-    "fixed_travel_minutes=10 on every leg [representative + interpretation], "
-    "cost_per_truck_day_eur=500, operating_days_per_week=5, "
-    "operating_days_per_year=200 [representative] — alongside the unchanged "
-    "[demo assumption] values (vehicle 12,000 L / 10,000 kg x 3, densities 0.5 "
-    "kg/litre, disposal unload 30 min, shift 480 min, geography knobs, solver "
-    "budget). All numbers below supersede the v2 demo numbers, which remain "
-    "recorded in docs/PROGRESS.md (M12/M13 history) only. Cost figures are "
-    "[predicted] derivations, never invoiced amounts (§4.4)."
+    "v3 parameter change (2026-11-14), superseded in v4 only by the density "
+    "source and the new fixed-frequency scenario: the comparison runs on the "
+    "§4.6 v3 representative parameters — container_volume_litres=3000 "
+    "[representative], stop_service_minutes=5 [representative], "
+    "travel_time_mode=fixed_per_leg with fixed_travel_minutes=10 on every leg "
+    "[representative + interpretation], cost_per_truck_day_eur=500, "
+    "operating_days_per_week=5, operating_days_per_year=200 [representative] "
+    "— alongside the unchanged [demo assumption] values (vehicle 12,000 L / "
+    f"10,000 kg x 3; densities 0.40 kg/litre — {DEMO_DENSITY_SOURCE_LABEL}; "
+    "disposal unload 30 min, shift 480 min, geography knobs, solver budget). "
+    "All numbers below supersede the v2 demo numbers, which remain recorded "
+    "in docs/PROGRESS.md (M12/M13 history) only. Cost figures are [predicted] "
+    "derivations, never invoiced amounts (§4.4)."
 )
 
 SCENARIO_HEADINGS: dict[str, str] = {
+    "naive_fixed_frequency": (
+        "Scenario 1 — naive_fixed_frequency (§4.7 v4 status quo: series due "
+        "under the fixed frequency_days cycle, area-sweep order)"
+    ),
     "naive_sweep_all": (
-        "Scenario 1 — naive_sweep_all (ALL series, no policy filter, naive area-sweep order)"
+        "Scenario 2 — naive_sweep_all (ALL series, no policy filter, naive area-sweep order)"
     ),
     "naive_sweep_selected": (
-        "Scenario 2 — naive_sweep_selected (policy-selected series only, same area-sweep order)"
+        "Scenario 3 — naive_sweep_selected (policy-selected series only, same area-sweep order)"
     ),
-    "ortools": "Scenario 3 — ortools (OR-Tools CVRP, `src.routing.solver.solve`)",
+    "ortools": "Scenario 4 — ortools (OR-Tools CVRP, `src.routing.solver.solve`)",
 }
 
 
@@ -283,8 +294,9 @@ def _render_markdown(
     date_max: date | None,
     run: ComparisonRun,
 ) -> str:
-    """Render the three §4.7 scenarios, gains, determinism and labels."""
+    """Render the four §4.7 scenarios, gains, determinism and labels."""
     sweeps = {
+        "naive_fixed_frequency": run.fixed_frequency,
         "naive_sweep_all": run.sweep_all,
         "naive_sweep_selected": run.sweep_selected,
     }
@@ -329,6 +341,28 @@ def _render_markdown(
         add(f"## {SCENARIO_HEADINGS[scenario.method]}")
         add("")
         lines.extend(_scenario_table(scenario))
+        # §4.7 v4: the status-quo scenario reports its service level beside
+        # cost — the observed anchor over ALL dataset records (§5.2.4
+        # numerator/denominator; every row is an emptying record, §1.5).
+        if scenario.method == "naive_fixed_frequency":
+            anchor = run.observed_anchor
+            share = (
+                "null (no records)"
+                if anchor.share_full_or_overfull_pct is None
+                else f"{anchor.share_full_or_overfull_pct}"
+            )
+            max_fill = (
+                "null (no numeric records)"
+                if anchor.max_fill_pct is None
+                else f"{anchor.max_fill_pct}"
+            )
+            add("")
+            add(
+                f"Observed service anchor (§4.7 status quo): {share} % of emptying "
+                "records full or overfull (numeric >= 100 or overfull token over "
+                f"all {n_rows} records) [observed §1.5]; max observed numeric "
+                f"fill: {max_fill} %."
+            )
         sweep = sweeps.get(scenario.method)
         if sweep is not None:
             lines.extend(_sweep_lines(sweep, scenario))

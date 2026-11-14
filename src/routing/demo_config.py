@@ -29,9 +29,11 @@ from src.routing.schemas import (
 
 __all__ = [
     "DEMO_AVG_SPEED_KMH",
+    "DEMO_CONTAINERS_PER_SERIES",
     "DEMO_CONTAINER_VOLUME_LITRES",
     "DEMO_COST_PER_TRUCK_DAY_EUR",
     "DEMO_DENSITIES_KG_PER_LITRE",
+    "DEMO_DENSITY_SOURCE_LABEL",
     "DEMO_DEPOT_ID",
     "DEMO_DEPOT_LAT",
     "DEMO_DEPOT_LON",
@@ -43,6 +45,7 @@ __all__ = [
     "DEMO_DISPOSAL_NAME",
     "DEMO_DISPOSAL_SERVICE_MINUTES",
     "DEMO_FIXED_TRAVEL_MINUTES",
+    "DEMO_FREQUENCY_DAYS",
     "DEMO_GEOGRAPHY_SEED",
     "DEMO_GEOGRAPHY_SPREAD_KM",
     "DEMO_MAX_SHIFT_MINUTES",
@@ -67,12 +70,21 @@ __all__ = [
 
 DEMO_CONTAINER_VOLUME_LITRES = 3000  # litres; 3 m³ per container [representative]
 
+# §4.6 v4 density (2026-11-14): 0.40 kg/L uniform across materials —
+# [literature] German AVV conversion table, AVV 20 01 02 "Altglas
+# (Flaschen-/Behälterglas, Depotcontainer)" (0.40 t/m³; the partner's
+# 380 kg/m³ figure corroborates within 5 %). Request-overridable per material;
+# the label below must travel with every echo of the default (§4.6: overrides
+# never relabel facts).
+DEMO_DENSITY_SOURCE_LABEL = (
+    "[literature] German AVV table AVV 20 01 02 (entsorgen-versorgen.de, retrieved 2026-11-14)"
+)
+
 DEMO_DENSITIES_KG_PER_LITRE: dict[MaterialType, float] = {
-    # conservative loose-cullet demo value, uniform across materials §4.6 [demo assumption]
-    "brown": 0.5,
-    "green": 0.5,
-    "white": 0.5,
-}
+    "brown": 0.4,
+    "green": 0.4,
+    "white": 0.4,
+}  # kg/litre [literature] — see DEMO_DENSITY_SOURCE_LABEL (§4.6 v4)
 
 DEMO_VEHICLE_ID = "demo_truck"  # one vehicle type in v1 §4.6 [demo assumption]
 DEMO_VEHICLE_NAME = "Demo Collection Truck"  # [demo assumption]
@@ -105,6 +117,18 @@ DEMO_OPERATING_DAYS_PER_YEAR = 200  # days/year [representative] (echo/display)
 # (regression-tested). [demo assumption knobs]
 DEMO_GEOGRAPHY_SEED = 0  # 0 = current SHA-256 layout
 DEMO_GEOGRAPHY_SPREAD_KM = 6.0  # km; outer radius of the current 1-6 km band
+
+# --- §4.6 v4 knobs (2026-11-14) ----------------------------------------------
+
+# One igloo per colour per location; 441/449 sites carry all three colours
+# [observed]. Multiplies litres collected AND stop service minutes; predicted
+# fill % unchanged (§4.2 v4) [demo assumption — Q11].
+DEMO_CONTAINERS_PER_SERIES = 1
+
+# naive_fixed_frequency cycle length (§4.7/§5.2.4): due iff
+# as_of - last_emptying_date >= frequency_days; observed median gap 28 days
+# [demo assumption].
+DEMO_FREQUENCY_DAYS = 28
 
 # --- §4.6 v2 solver defaults (user-approved 2026-11-14) ---------------------
 
@@ -187,4 +211,6 @@ def demo_routing_config() -> RoutingConfig:
         operating_days_per_year=DEMO_OPERATING_DAYS_PER_YEAR,
         geography_seed=DEMO_GEOGRAPHY_SEED,
         geography_spread_km=DEMO_GEOGRAPHY_SPREAD_KM,
+        containers_per_series=DEMO_CONTAINERS_PER_SERIES,
+        frequency_days=DEMO_FREQUENCY_DAYS,
     )

@@ -73,9 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     for method in metrics:
         print(
-            f"{method} skipped_no_numeric_history:"
-            f" validation={metrics[method]['validation'].n_skipped_no_numeric_history}"
-            f" test={metrics[method]['test'].n_skipped_no_numeric_history}"
+            f"{method} skipped_no_prediction:"
+            f" validation={metrics[method]['validation'].n_skipped_no_prediction}"
+            f" test={metrics[method]['test'].n_skipped_no_prediction}"
         )
     for method in sorted(metrics):
         for split in REPORT_SPLITS:

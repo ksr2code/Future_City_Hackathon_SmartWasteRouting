@@ -65,7 +65,7 @@ class TestEnvSolverTimeLimit:
         upload_csv(client)
         body = route_body(client)
         assert all(
-            "[demo assumption]" in label or "[representative]" in label
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
             for label in body["assumptions"]
         )
         joined = "\n".join(body["assumptions"])
@@ -86,7 +86,7 @@ class TestEnvSolverTimeLimit:
             body = route_body(client)
         assert hosted.hosted_solver_time_limit_s() is None  # 500-free fallback
         assert all(
-            "[demo assumption]" in label or "[representative]" in label
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
             for label in body["assumptions"]
         )
         assert any(record.levelno == logging.WARNING for record in caplog.records)
@@ -108,7 +108,7 @@ class TestEnvSolverTimeLimit:
             body = route_body(client)
         assert hosted.hosted_solver_time_limit_s() is None  # 500-free fallback
         assert all(
-            "[demo assumption]" in label or "[representative]" in label
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
             for label in body["assumptions"]
         )
         assert "solver_time_limit_s=inf" not in "\n".join(body["assumptions"])
@@ -124,7 +124,7 @@ class TestEnvSolverTimeLimit:
         upload_csv(client)
         body = route_body(client)
         assert all(
-            "[demo assumption]" in label or "[representative]" in label
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
             for label in body["assumptions"]
         )
 
@@ -190,7 +190,7 @@ class TestEnvMaxStops:
             "hosted_demo_stop_cap" in item["reason"] for item in body["solution"]["unserved"]
         )
         assert all(
-            "[demo assumption]" in label or "[representative]" in label
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
             for label in body["assumptions"]
         )
 
@@ -223,7 +223,7 @@ class TestEnvMaxStops:
         upload_csv(client)
         response = client.get("/api/comparison")
         assert response.status_code == 200, response.text
-        ortools_row = response.json()["scenarios"][2]
+        ortools_row = response.json()["scenarios"][3]  # v4 order: fixed_frequency is [0]
         assert ortools_row["method"] == "ortools"
         assert ortools_row["stops_total"] == 4  # full selection, NOT the cap
         # The same env caps the interactive route as usual (contrast).

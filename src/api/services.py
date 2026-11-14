@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Literal, TypeVar
 
 from src.api import hosted, schemas
-from src.api.errors import DemoDatasetMissingError
+from src.api.errors import ApiError, DemoDatasetMissingError
 from src.api.state import store
 from src.collection.policy import (
     Candidate,
@@ -33,6 +33,17 @@ from src.collection.policy import (
     SelectionResult,
     Skip,
     select_candidates,
+)
+from src.collection.simulation import (
+    SimulationConfig,
+    StrategySimulation,
+    simulate_strategy,
+)
+from src.collection.simulation import (
+    calibration as simulate_calibration,
+)
+from src.collection.simulation import (
+    observed_anchor as simulate_observed_anchor,
 )
 from src.data.loader import load_glass_fill_csv
 from src.data.schema import (
@@ -48,12 +59,17 @@ from src.forecasting.baseline import (
     ForecastRecord,
     forecast,
 )
-from src.forecasting.days_to_full import build_days_to_full
+from src.forecasting.days_to_full import (
+    DaysToFullStats,
+    SeriesDaysToFull,
+    build_days_to_full,
+)
 from src.forecasting.features import SeriesKey, build_feature_row, group_by_series
 from src.forecasting.targets import EvaluationCase
 from src.routing.demo_config import (
     DEMO_CONTAINER_VOLUME_LITRES,
     DEMO_COST_PER_TRUCK_DAY_EUR,
+    DEMO_DENSITY_SOURCE_LABEL,
     DEMO_DEPOT_ID,
     DEMO_DISPOSAL_ID,
     DEMO_DISPOSAL_SERVICE_MINUTES,
@@ -73,6 +89,8 @@ from src.routing.geography import (
 from src.routing.naive import (
     SWEEP_CELL_SIZE_DEG,
     NaiveSolution,
+    due_series_keys,
+    naive_fixed_frequency_simulation,
     naive_sweep_simulation,
 )
 from src.routing.schemas import (
@@ -259,14 +277,15 @@ def containers() -> list[schemas.SeriesStatusResponse]:
 
 # --- Config defaults (§5.1 GET /api/config) ----------------------------------
 
-ConfigSourceLabel = Literal["representative", "demo assumption"]
-"""§5.2 v3 ConfigDefaults.sources value type (per-field source labels)."""
+ConfigSourceLabel = Literal["representative", "demo assumption", "literature"]
+"""§5.2 v3/v4 ConfigDefaults.sources value type (per-field source labels;
+"literature" carries its verbatim citation in ``source_labels``)."""
 
 ROUTING_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {
     # §4.6 v3 per-field source labels: [representative] = verbal from the
     # challenge representative (14 Nov 2026); [demo assumption] = synthetic.
     "container_volume_litres": "representative",
-    "densities_kg_per_litre": "demo assumption",
+    "densities_kg_per_litre": "literature",  # §4.6 v4: AVV 20 01 02, see DEMO_DENSITY_SOURCE_LABEL
     "vehicle_volume_capacity_litres": "demo assumption",
     "vehicle_weight_capacity_kg": "demo assumption",
     "vehicle_count_available": "demo assumption",
@@ -285,6 +304,9 @@ ROUTING_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {
     "detour_factor": "demo assumption",
     "solver_solution_limit": "demo assumption",
     "solver_time_limit_s": "demo assumption",
+    # §4.2/§4.6 v4 knobs (§5.2 echo; Q10/Q11 per docs/open_questions.md).
+    "containers_per_series": "demo assumption",
+    "frequency_days": "demo assumption",
 }
 POLICY_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {
     name: "demo assumption" for name in schemas.PolicyDefaults.model_fields
@@ -311,6 +333,13 @@ def config_defaults() -> schemas.ConfigDefaultsResponse:
             "RoutingDefaults has fields missing from ROUTING_FIELD_SOURCES: "
             f"{sorted(set(schemas.RoutingDefaults.model_fields) - set(ROUTING_FIELD_SOURCES))}"
         )
+    # Verbatim per-field source labels (§4.6 v4): the density carries the full
+    # [literature] citation (DEMO_DENSITY_SOURCE_LABEL) unchanged; every other
+    # field carries its §4.6 status tag from the sources map.
+    source_labels: dict[str, str] = {
+        name: (DEMO_DENSITY_SOURCE_LABEL if name == "densities_kg_per_litre" else f"[{source}]")
+        for name, source in sources.items()
+    }
     return schemas.ConfigDefaultsResponse(
         policy=schemas.PolicyDefaults(
             select_threshold_pct=policy.select_threshold_pct,
@@ -342,9 +371,12 @@ def config_defaults() -> schemas.ConfigDefaultsResponse:
             detour_factor=routing.detour_factor,
             solver_solution_limit=routing.solver_solution_limit,
             solver_time_limit_s=routing.solver_time_limit_s,
+            containers_per_series=routing.containers_per_series,
+            frequency_days=routing.frequency_days,
         ),
         assumption_fields=[name for name, source in sources.items() if source == "demo assumption"],
         sources=sources,
+        source_labels=source_labels,
     )
 
 
@@ -733,6 +765,11 @@ def _effective_routing(
         ),
         geography_seed=_pick(overrides.geography_seed, base_config.geography_seed),
         geography_spread_km=_pick(overrides.geography_spread_km, base_config.geography_spread_km),
+        # §4.2/§4.6 v4 knobs (RoutingConfig constructor validates int >= 1 → 422).
+        containers_per_series=_pick(
+            overrides.containers_per_series, base_config.containers_per_series
+        ),
+        frequency_days=_pick(overrides.frequency_days, base_config.frequency_days),
     )
     vehicle = VehicleType(
         id=base_vehicle.id,
@@ -793,6 +830,9 @@ def _solution_response(
             collected_weight_kg=solution.totals.collected_weight_kg,
             stops_served=solution.totals.stops_served,
             stops_total=solution.totals.stops_total,
+            # §4.3 v4 [predicted] derived passthrough (solver.derive_shift_totals).
+            shift_minutes_used=solution.totals.shift_minutes_used,
+            stops_per_shift=solution.totals.stops_per_shift,
         ),
         fleet_recommendation=schemas.FleetRecommendationResponse(
             vehicle_type_id=solution.fleet_recommendation.vehicle_type_id,
@@ -895,7 +935,7 @@ def _assumption_labels(
         f"{ASSUMPTION_LABEL} synthetic depot '{DEMO_DEPOT_ID}' and disposal site "
         f"'{DEMO_DISPOSAL_ID}' near Heilbronn",
         f"{REPRESENTATIVE_LABEL} container_volume_litres={routing.container_volume_litres}",
-        f"{ASSUMPTION_LABEL} densities_kg_per_litre="
+        f"{DEMO_DENSITY_SOURCE_LABEL} densities_kg_per_litre="  # §4.6 v4 verbatim label
         + ", ".join(
             f"{material}={density}" for material, density in config.densities_kg_per_litre.items()
         )
@@ -925,6 +965,13 @@ def _assumption_labels(
         "sensitivity knobs; defaults reproduce the current coordinates)",
         f"{ASSUMPTION_LABEL} solver_solution_limit={config.solver_solution_limit} "
         "(primary stopping criterion, deterministic; §4.7)",
+        # §4.2/§4.6 v4 knobs — effective values echoed per §5.3.
+        f"{ASSUMPTION_LABEL} containers_per_series={config.containers_per_series} "
+        "(multiplies litres collected and stop service minutes; the predicted "
+        "fill % is the series aggregate and does NOT change — Q11), "
+        f"frequency_days={config.frequency_days} "
+        "(fixed-collection-cycle length, §4.7/§5.2.4; real schedule unknown "
+        "[open question Q10])",
     ]
     if routing.solver_time_limit_from_env:
         labels.append(
@@ -949,36 +996,37 @@ def _assumption_labels(
     return labels
 
 
-# --- Days-to-full (§5.1 GET /api/days-to-full; §5.2.3, v3 2026-11-14) --------
+# --- Days-to-full (§5.1 GET /api/days-to-full; §5.2.3 v2, 2026-11-14) --------
 
 
 def days_to_full() -> schemas.DaysToFullResponse:
-    """§5.2.3 days-to-full estimates for every series of the active dataset,
-    computed by ``src.forecasting.days_to_full`` (§2/§5 modules only — no
-    business logic here). [predicted] from fill history only; the caveats
-    (constant-rate assumption, observed median reading gap) are echoed in
+    """§5.2.3 v2 days-to-full estimates for every series of the active
+    dataset, computed by ``src.forecasting.days_to_full`` (§2/§5 modules only
+    — no business logic here). [predicted] from emptying records only
+    (§1.5); the mandatory §1.5 caveat and model assumptions are echoed in
     ``assumptions``. 404 on no dataset is the shared ``NoDatasetError``
     mapping (``store.dataset`` raises it)."""
     result = build_days_to_full(store.dataset)
     return schemas.DaysToFullResponse(
         method=result.method,
-        stats=schemas.DaysToFullStatsResponse(
-            series_total=result.stats.series_total,
-            series_with_estimate=result.stats.series_with_estimate,
-            median_days=result.stats.median_days,
-            mean_days=result.stats.mean_days,
-            min_days=result.stats.min_days,
-            max_days=result.stats.max_days,
-        ),
+        target_pct=result.target_pct,
+        stats=_days_to_full_stats(result.stats),
+        stats_by_material={
+            material: _days_to_full_stats(stats)
+            for material, stats in result.stats_by_material.items()
+        },
         series=[
             schemas.DaysToFullSeriesResponse(
                 location_id=row.location_id,
                 material_type=row.material_type,
-                last_date=row.last_date,
+                last_emptying_date=row.last_emptying_date,
                 last_fill_pct=row.last_fill_pct,
                 last_is_overfull=row.last_is_overfull,
                 rate_pct_per_day=row.rate_pct_per_day,
+                median_interval_days=row.median_interval_days,
                 days_to_full=row.days_to_full,
+                predicted_full_date=row.predicted_full_date,
+                is_lower_bound=row.is_lower_bound,
                 reason=row.reason,
             )
             for row in result.series
@@ -987,17 +1035,31 @@ def days_to_full() -> schemas.DaysToFullResponse:
     )
 
 
+def _days_to_full_stats(stats: DaysToFullStats) -> schemas.DaysToFullStatsResponse:
+    """Map one §5.2.3 stats block (shared by overall and per-material)."""
+    return schemas.DaysToFullStatsResponse(
+        series_total=stats.series_total,
+        series_with_estimate=stats.series_with_estimate,
+        median_days=stats.median_days,
+        mean_days=stats.mean_days,
+        min_days=stats.min_days,
+        max_days=stats.max_days,
+        lower_bound_share_pct=stats.lower_bound_share_pct,
+    )
+
+
 # --- Comparison (§5.1 GET /api/comparison; §5.2.2; shared with the M12 CLI) --
 
 
 @dataclass(frozen=True)
 class ComparisonRun:
-    """Everything the §5.2.2 v2 ComparisonResponse and the M12 CLI markdown
+    """Everything the §5.2.2 v2/v4 ComparisonResponse and the M12 CLI markdown
     are built from — ONE shared core (CLI + endpoint, §5.2.2)."""
 
     as_of_date: date
     target_date: date
     horizon_days: int
+    fixed_frequency: NaiveSolution  # §4.7 v4 status quo (due series only)
     sweep_all: NaiveSolution
     sweep_selected: NaiveSolution
     optimised_median: schemas.RouteResponse  # run whose distance is the median
@@ -1005,6 +1067,7 @@ class ComparisonRun:
     gains: schemas.ComparisonGainsResponse
     optimised_determinism: schemas.OptimisedDeterminismResponse
     fleet_budget: schemas.FleetBudgetResponse
+    observed_anchor: schemas.ObservedAnchorResponse  # v4 §4.7 service anchor
     distance_provenance: str
     assumptions: list[str]
 
@@ -1091,10 +1154,12 @@ def run_comparison(
     runs: int = COMPARISON_RUNS,
 ) -> ComparisonRun:
     """Shared comparison core (M12 CLI ``compare_demo`` and GET
-    /api/comparison) per contract §4.7 v2: three scenarios in fixed order
-    (``naive_sweep_all``, ``naive_sweep_selected``, ``ortools``), gain
-    decomposition, and the §4.7 repetition protocol (``runs`` optimised
-    solves; the median run is the value used in UI and docs).
+    /api/comparison) per contract §4.7 v2/v4: four scenarios in fixed order
+    (``naive_fixed_frequency`` status quo, ``naive_sweep_all``,
+    ``naive_sweep_selected``, ``ortools``), gain decomposition over the last
+    three, the §4.7 repetition protocol (``runs`` optimised solves; the
+    median run is the value used in UI and docs), and the observed service
+    anchor beside every cost (§4.7 v4).
 
     ``dataset`` must be the active store dataset (the CLI uploads it first;
     the endpoint has it loaded) because ``run_route`` reads the store.
@@ -1145,7 +1210,27 @@ def run_comparison(
     )
     sweep_selected = naive_sweep_simulation(problem_selected, no_forecast_selected)
 
+    # §4.7 v4 status quo: only series DUE under the fixed k-day cycle
+    # (as_of - last_emptying_date >= frequency_days; no last date ⇒ due).
+    # The last emptying date known at as_of is the latest record date <= as_of
+    # (leakage rule 6: no information after the prediction date). frequency_days
+    # resolves to problem_all.config.frequency_days (§4.6 default 28) — one
+    # source of truth, shared with the simulation via due_series_keys.
+    grouped = group_by_series(dataset.readings)
+    last_emptying_dates: dict[SeriesKey, date | None] = {
+        key: max((reading.date for reading in readings if reading.date <= as_of), default=None)
+        for key, readings in grouped.items()
+    }
+    due = due_series_keys(last_emptying_dates, as_of, problem_all.config.frequency_days)
+    fixed_frequency = naive_fixed_frequency_simulation(
+        problem_all,
+        last_emptying_dates,
+        as_of,
+        no_forecast_stop_keys=[key for key in no_forecast_all if key in due],
+    )
+
     scenarios = [
+        _naive_scenario_row("naive_fixed_frequency", fixed_frequency),
         _naive_scenario_row("naive_sweep_all", sweep_all),
         _naive_scenario_row("naive_sweep_selected", sweep_selected),
         _ortools_scenario_row(optimised_median),
@@ -1157,6 +1242,7 @@ def run_comparison(
         as_of_date=as_of,
         target_date=as_of + timedelta(days=horizon_days),
         horizon_days=horizon_days,
+        fixed_frequency=fixed_frequency,
         sweep_all=sweep_all,
         sweep_selected=sweep_selected,
         optimised_median=optimised_median,
@@ -1164,8 +1250,9 @@ def run_comparison(
         gains=gains,
         optimised_determinism=determinism,
         fleet_budget=_fleet_budget(optimised_median),
+        observed_anchor=_observed_service_anchor(dataset),
         distance_provenance=optimised_median.solution.distance_provenance,
-        assumptions=_comparison_assumptions(optimised_median),
+        assumptions=_comparison_assumptions(optimised_median, len(due)),
     )
 
 
@@ -1261,10 +1348,12 @@ def _ortools_scenario_row(
 def _comparison_gains(
     scenarios: list[schemas.ComparisonScenarioResponse], optimised: schemas.RouteResponse
 ) -> schemas.ComparisonGainsResponse:
-    """§4.7 gain decomposition in metres. ``routing_gain_m``/``total_gain_m``
-    are ``None`` when the optimised scenario has no usable solution
-    (infeasible/timeout): a gain against 0 would be fabricated, §5.2.2."""
-    sweep_all, sweep_selected, optimised_row = scenarios
+    """§4.7 gain decomposition in metres over the three gain-relevant
+    scenarios (fixed_frequency is the status quo and carries no gain).
+    ``routing_gain_m``/``total_gain_m`` are ``None`` when the optimised
+    scenario has no usable solution (infeasible/timeout): a gain against 0
+    would be fabricated, §5.2.2."""
+    _, sweep_all, sweep_selected, optimised_row = scenarios
     selection_gain = sweep_all.distance_m - sweep_selected.distance_m
     usable = optimised.solution.status in ("optimal", "feasible")
     routing_gain = sweep_selected.distance_m - optimised_row.distance_m if usable else None
@@ -1293,8 +1382,22 @@ def _optimised_determinism(
     )
 
 
+def _observed_service_anchor(dataset: Dataset) -> schemas.ObservedAnchorResponse:
+    """§4.7 v4/§5.2.4 ``observed_service_anchor`` from the ACTIVE dataset
+    records: numerator = numeric fill >= 100 + overfull records, denominator
+    = n_rows (FillStats convention §5.2.2). Computed by
+    ``src.collection.simulation.observed_anchor`` — the §2/§5 module owns the
+    arithmetic (no business logic in the API layer)."""
+    anchor = simulate_observed_anchor(dataset.readings)
+    return schemas.ObservedAnchorResponse(
+        basis=anchor.basis,
+        share_full_or_overfull_pct=anchor.share_full_or_overfull_pct,
+        max_fill_pct=anchor.max_fill_pct,
+    )
+
+
 def comparison() -> schemas.ComparisonResponse:
-    """§5.2.2 v2 ComparisonResponse on the active dataset with the fixed
+    """§5.2.2 v2/v4 ComparisonResponse on the active dataset with the fixed
     defaults echoed (as_of 2026-09-30, horizon 28, persistence)."""
     run = run_comparison(
         store.dataset,
@@ -1310,16 +1413,22 @@ def comparison() -> schemas.ComparisonResponse:
         gains=run.gains,
         optimised_determinism=run.optimised_determinism,
         fleet_budget=run.fleet_budget,
+        observed_service_anchor=run.observed_anchor,
         distance_provenance=run.distance_provenance,
         assumptions=run.assumptions,
     )
 
 
-def _comparison_assumptions(optimised: schemas.RouteResponse) -> list[str]:
+def _comparison_assumptions(optimised: schemas.RouteResponse, n_due: int) -> list[str]:
     """§5.2.2 assumption labels: the optimised pipeline labels plus the naive
-    area-sweep order/zero-fill rules and the §4.7 determinism protocol note."""
+    area-sweep order/zero-fill rules, the §4.7 v4 fixed-frequency due rule
+    and the determinism protocol note."""
     return [
         *optimised.assumptions,
+        f"{ASSUMPTION_LABEL} naive_fixed_frequency status quo: a series is due "
+        "iff as_of - last_emptying_date >= frequency_days (no last date ⇒ "
+        f"due; §4.6 default 28 d); {n_due} of the dataset series were due at "
+        "as_of — the real schedule is unknown [open question Q10]",
         f"{ASSUMPTION_LABEL} naive visiting order is the §4.7 area sweep: "
         f"grid cells of SWEEP_CELL_SIZE_DEG={SWEEP_CELL_SIZE_DEG}° (~1 km), "
         "row-major, lexicographic within a cell — the data has no area field",
@@ -1327,3 +1436,253 @@ def _comparison_assumptions(optimised: schemas.RouteResponse) -> list[str]:
         "value at as_of are still visited and collect 0 L / 0 kg",
         DETERMINISM_NOTE,
     ]
+
+
+# --- Scenarios + simulation (§5.2.4/§5.2.5; src/collection/simulation core) --
+
+
+SIMULATION_RATES_CAVEAT = "simulation based on historical rates, not a prediction of reality"
+"""§5.2.5 mandatory assumption — contract-locked VERBATIM (§6 wording)."""
+
+
+def _simulation_setup(
+    request: schemas.ScenarioRequest,
+) -> tuple[date, date, SimulationConfig, list[SeriesDaysToFull], dict[tuple[str, str], date]]:
+    """Shared §5.2.4/§5.2.5 setup, validation in contract order (§5.3): no
+    dataset → 404 (``store.dataset`` raises NoDatasetError); empty dataset →
+    422; overrides → RoutingConfig/PolicyConfig constructors (their messages
+    surface on 422); ``travel_time_mode != "fixed_per_leg"`` → 422 (the
+    replay is flat-mode, §4.4/§5.2.4); non-uniform densities → 422 (the
+    fill→weight arithmetic takes one density); SimulationConfig construction
+    last (SimulationConfigError → 422 via the main.py handler). Window:
+    start = dataset date_min, length = ``request.simulation_days`` or the
+    observed window length (inclusive end). Rates are taken VERBATIM from
+    ``build_days_to_full`` §5.2.3 rows — never recomputed here.
+
+    §5.2.5 replay initialisation (user-approved addendum): per series key the
+    prior emptying date is the max record date <= start_date (leakage-safe —
+    nothing after the window start informs the replay); series with no such
+    record stay absent so the simulation clock starts at ``start_date``. The
+    same mapping seeds BOTH strategies (one shared initialisation)."""
+    dataset = store.dataset
+    if not dataset.readings:
+        raise ApiError(
+            422,
+            "dataset has no rows: the scenario/simulation replay needs at "
+            "least one emptying record",
+        )
+    routing = _effective_routing(request.routing_config)
+    if routing.config.travel_time_mode != "fixed_per_leg":
+        raise ApiError(
+            422,
+            "scenarios/simulation replay supports only travel_time_mode="
+            f"'fixed_per_leg' (flat-mode arithmetic, §4.4/§5.2.4), got "
+            f"'{routing.config.travel_time_mode}'",
+        )
+    densities = set(routing.config.densities_kg_per_litre.values())
+    if len(densities) != 1:
+        raise ApiError(
+            422,
+            "scenarios/simulation replay supports only one uniform "
+            "density_kg_per_litre (per-material densities are a routing "
+            f"concept, §5.2.4), got {sorted(densities)} kg/litre",
+        )
+    policy = _effective_policy_config(request.policy_config)
+
+    date_min = min(reading.date for reading in dataset.readings)
+    date_max = max(reading.date for reading in dataset.readings)
+    observed_window_days = (date_max - date_min).days + 1
+    simulation_days = (
+        request.simulation_days if request.simulation_days is not None else observed_window_days
+    )
+    estimates = build_days_to_full(dataset).series
+    sim_config = SimulationConfig(
+        frequency_days=(
+            request.frequency_days
+            if request.frequency_days is not None
+            else routing.config.frequency_days
+        ),
+        select_threshold_pct=policy.select_threshold_pct,
+        container_volume_litres=routing.container_volume_litres,
+        containers_per_series=routing.config.containers_per_series,
+        service_minutes_per_stop=routing.stop_service_minutes,
+        fixed_travel_minutes=routing.config.fixed_travel_minutes,
+        disposal_service_minutes=routing.disposal.service_minutes,
+        max_shift_minutes=routing.config.max_shift_minutes,
+        volume_capacity_litres=routing.vehicle.volume_capacity_litres,
+        weight_capacity_kg=routing.vehicle.weight_capacity_kg,
+        density_kg_per_litre=densities.pop(),
+        cost_per_truck_day_eur=routing.config.cost_per_truck_day_eur,
+        operating_days_per_year=routing.config.operating_days_per_year,
+    )
+    end_date = date_min + timedelta(days=simulation_days - 1)
+    # §5.2.5 replay initialisation: last record <= start_date per series
+    # (leakage-safe); absent keys start their clock at start_date. The
+    # key type widens SeriesKey to tuple[str, str] to match
+    # simulate_strategy's Mapping parameter.
+    prior_emptying_dates: dict[tuple[str, str], date] = {}
+    for key, readings in group_by_series(dataset.readings).items():
+        prior = max(
+            (reading.date for reading in readings if reading.date <= date_min),
+            default=None,
+        )
+        if prior is not None:
+            prior_emptying_dates[key] = prior
+    return date_min, end_date, sim_config, estimates, prior_emptying_dates
+
+
+def _simulation_config_echo(
+    sim_config: SimulationConfig, simulation_days: int
+) -> schemas.SimulationConfigEcho:
+    """Effective simulation inputs (§5.3 echo rule)."""
+    return schemas.SimulationConfigEcho(
+        frequency_days=sim_config.frequency_days,
+        simulation_days=simulation_days,
+        select_threshold_pct=sim_config.select_threshold_pct,
+        container_volume_litres=sim_config.container_volume_litres,
+        containers_per_series=sim_config.containers_per_series,
+        service_minutes_per_stop=sim_config.service_minutes_per_stop,
+        fixed_travel_minutes=sim_config.fixed_travel_minutes,
+        disposal_service_minutes=sim_config.disposal_service_minutes,
+        max_shift_minutes=sim_config.max_shift_minutes,
+        volume_capacity_litres=sim_config.volume_capacity_litres,
+        weight_capacity_kg=sim_config.weight_capacity_kg,
+        density_kg_per_litre=sim_config.density_kg_per_litre,
+        cost_per_truck_day_eur=sim_config.cost_per_truck_day_eur,
+        operating_days_per_year=sim_config.operating_days_per_year,
+        travel_time_mode="fixed_per_leg",  # the only mode the replay supports (§5.2.4)
+    )
+
+
+def _simulation_assumptions(sim_config: SimulationConfig) -> list[str]:
+    """§5.2.4/§5.2.5 assumption labels — per-value source tags mirroring
+    ``_assumption_labels``; effective values are echoed in ``config_echo``."""
+    return [
+        SIMULATION_RATES_CAVEAT,  # §5.2.5 mandatory, verbatim
+        "per-series fill model: rate_pct_per_day x days since last emptying "
+        "(container refills from 0 after each emptying; §5.2.3/§5.2.5)",
+        f"{ASSUMPTION_LABEL} frequency_days={sim_config.frequency_days} "
+        "(fixed-collection-cycle length, §4.7/§5.2.4; real schedule unknown [Q10])",
+        f"{ASSUMPTION_LABEL} select_threshold_pct={sim_config.select_threshold_pct:g} "
+        "(demand_driven emptying trigger; §3.1 default)",
+        f"{REPRESENTATIVE_LABEL} container_volume_litres={sim_config.container_volume_litres}",
+        f"{ASSUMPTION_LABEL} containers_per_series={sim_config.containers_per_series} (Q11)",
+        f"{REPRESENTATIVE_LABEL} service_minutes_per_stop={sim_config.service_minutes_per_stop}",
+        f"{REPRESENTATIVE_LABEL} fixed_travel_minutes={sim_config.fixed_travel_minutes} "
+        "on every leg (flat mode, §4.4)",
+        f"{ASSUMPTION_LABEL} disposal_service_minutes={sim_config.disposal_service_minutes}",
+        f"{REPRESENTATIVE_LABEL} max_shift_minutes={sim_config.max_shift_minutes}",
+        f"{ASSUMPTION_LABEL} volume_capacity_litres={sim_config.volume_capacity_litres}, "
+        f"weight_capacity_kg={sim_config.weight_capacity_kg}",
+        f"{DEMO_DENSITY_SOURCE_LABEL} density_kg_per_litre="
+        f"{sim_config.density_kg_per_litre:g} kg/litre",
+        f"{REPRESENTATIVE_LABEL} cost_per_truck_day_eur="
+        f"{sim_config.cost_per_truck_day_eur:g}, operating_days_per_year="
+        f"{sim_config.operating_days_per_year} (cost figures are [predicted], "
+        "never invoiced amounts)",
+    ]
+
+
+def _strategy_row(
+    strategy_id: Literal["fixed_frequency", "demand_driven"],
+    sim: StrategySimulation,
+) -> schemas.ScenarioStrategyResponse:
+    """§5.2.4 aggregates from one replay (cost [predicted] derivations)."""
+    return schemas.ScenarioStrategyResponse(
+        id=strategy_id,
+        truck_days=sim.truck_days,
+        stops_total=sim.stops_total,
+        cost_eur_total=sim.cost_eur_total,
+        cost_eur_per_year=sim.cost_eur_per_year,
+        service=schemas.ScenarioServiceBlock(
+            overflow_share_pct=sim.service.overflow_share_pct,
+            share_emptyings_full_or_overfull_pct=sim.service.share_emptyings_full_or_overfull_pct,
+            max_fill_pct=sim.service.max_fill_pct,
+        ),
+    )
+
+
+def _skipped_rows(sim: StrategySimulation) -> list[schemas.SkippedSeriesResponse]:
+    """The §5.2.3-reasoned skip list — identical for both strategies (same
+    inputs); §4.4: never silently dropped."""
+    return [
+        schemas.SkippedSeriesResponse(
+            location_id=skip.location_id,
+            material_type=skip.material_type,
+            reason=skip.reason,
+        )
+        for skip in sim.skipped
+    ]
+
+
+def run_scenarios(request: schemas.ScenarioRequest) -> schemas.ScenarioResponse:
+    """§5.2.4 parameterised what-if: replay BOTH strategies over the window
+    with the effective physics and report cost AND service level together
+    (§6). Deterministic; no solver runs (visiting order cannot change a
+    flat-mode day, §4.4)."""
+    start, end, sim_config, estimates, priors = _simulation_setup(request)
+    fixed = simulate_strategy(
+        estimates, "fixed_frequency", sim_config, start, end, prior_emptying_dates=priors
+    )
+    demand = simulate_strategy(
+        estimates, "demand_driven", sim_config, start, end, prior_emptying_dates=priors
+    )
+    anchor = simulate_observed_anchor(store.dataset.readings)
+    return schemas.ScenarioResponse(
+        strategies=[
+            _strategy_row("fixed_frequency", fixed),
+            _strategy_row("demand_driven", demand),
+        ],
+        skipped_series=_skipped_rows(fixed),
+        observed_anchor=schemas.ObservedAnchorResponse(
+            basis=anchor.basis,
+            share_full_or_overfull_pct=anchor.share_full_or_overfull_pct,
+            max_fill_pct=anchor.max_fill_pct,
+        ),
+        config_echo=_simulation_config_echo(sim_config, (end - start).days + 1),
+        assumptions=_simulation_assumptions(sim_config),
+    )
+
+
+def run_simulation(request: schemas.SimulationRequest) -> schemas.SimulationResponse:
+    """§5.2.5 deterministic daily replay of both strategies (no OR-Tools, no
+    seasonality). Calibration: fixed_frequency's simulated fill-at-emptying
+    median vs the observed numeric fill-at-emptying median (§5.2.5 sanity
+    check for TechDetails)."""
+    start, end, sim_config, estimates, priors = _simulation_setup(request)
+    fixed = simulate_strategy(
+        estimates, "fixed_frequency", sim_config, start, end, prior_emptying_dates=priors
+    )
+    demand = simulate_strategy(
+        estimates, "demand_driven", sim_config, start, end, prior_emptying_dates=priors
+    )
+    calib = simulate_calibration(fixed.fills_at_emptying, store.dataset.readings)
+
+    def _strategy(sim: StrategySimulation) -> schemas.SimulationStrategyResponse:
+        return schemas.SimulationStrategyResponse(
+            id=sim.strategy,
+            days=[
+                schemas.SimulationDayRecord(
+                    date=record.date,
+                    collections=record.collections,
+                    overflow_containers=record.overflow_containers,
+                    truck_days=record.truck_days,
+                    cumulative_cost_eur=record.cumulative_cost_eur,
+                )
+                for record in sim.days
+            ],
+        )
+
+    return schemas.SimulationResponse(
+        start_date=start,
+        end_date=end,
+        data_basis=schemas.SimulationDataBasis(),
+        strategies=[_strategy(fixed), _strategy(demand)],
+        calibration=schemas.CalibrationResponse(
+            simulated_fill_at_emptying_median_pct=calib.simulated_fill_at_emptying_median_pct,
+            observed_fill_at_emptying_median_pct=calib.observed_fill_at_emptying_median_pct,
+        ),
+        skipped_series=_skipped_rows(fixed),
+        config_echo=_simulation_config_echo(sim_config, (end - start).days + 1),
+        assumptions=_simulation_assumptions(sim_config),
+    )

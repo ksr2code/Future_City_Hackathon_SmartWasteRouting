@@ -30,15 +30,22 @@ SYN-CMP-4,brown,2026-09-12,20
 """
 
 # Hand-computed expectations (container 3000 L [representative §4.6 v3],
-# density 0.5 kg/l [demo assumption §4.6]): persistence fills at as_of:
-# CMP-1 90 -> 2700 L / 1350 kg, CMP-2 80 -> 2400 L / 1200 kg, CMP-4 20 ->
-# 600 L / 300 kg, CMP-3 no persistence -> 0 L / 0 kg.
+# density 0.40 kg/l [literature §4.6 v4 — AVV 20 01 02]; arithmetic:
+# 90 % x 3000 L = 2700 L x 0.40 = 1080 kg; 80 % -> 2400 L x 0.40 = 960 kg;
+# 20 % -> 600 L x 0.40 = 240 kg; CMP-3 no persistence -> 0 L / 0 kg).
+# Persistence fills at as_of 2026-09-30: CMP-1 90, CMP-2 80, CMP-4 20,
+# CMP-3 none.
 EXPECTED_LITRES_ALL = 2700 + 2400 + 0 + 600  # 5700 — naive_sweep_all (4 series)
-EXPECTED_KG_ALL = 1350 + 1200 + 0 + 300  # 2850
+EXPECTED_KG_ALL = 1080 + 960 + 0 + 240  # 2280
 EXPECTED_LITRES_SELECTED = 2700 + 2400  # 5100 — selected scenarios (90 + 80)
-EXPECTED_KG_SELECTED = 1350 + 1200  # 2550
+EXPECTED_KG_SELECTED = 1080 + 960  # 2040
 
-SCENARIO_ORDER = ["naive_sweep_all", "naive_sweep_selected", "ortools"]
+SCENARIO_ORDER = [
+    "naive_fixed_frequency",
+    "naive_sweep_all",
+    "naive_sweep_selected",
+    "ortools",
+]
 
 
 @pytest.fixture(scope="module")
@@ -58,8 +65,44 @@ def test_scenarios_in_fixed_contract_order(comparison: ComparisonResult) -> None
     assert [row.method for row in comparison.run.scenarios] == SCENARIO_ORDER
 
 
+def test_fixed_frequency_status_quo_row(comparison: ComparisonResult) -> None:
+    """§4.7 v4 status quo, hand check: as_of 2026-09-30, frequency_days 28
+    (§4.6 default). Last emptying dates and gaps to as_of:
+    CMP-1 2026-09-15 -> 15 d; CMP-2 2026-09-10 -> 20 d; CMP-3 2026-09-05 ->
+    25 d; CMP-4 2026-09-12 -> 18 d. No gap reaches 28 d, so NO series is due:
+    the scenario visits nothing (never fabricates work)."""
+    row = comparison.run.scenarios[0]
+    sweep = comparison.run.fixed_frequency
+    assert row.method == "naive_fixed_frequency"
+    assert sweep.method == "naive_fixed_frequency"
+    assert row.status == "complete"  # nothing visited, nothing unserved
+    assert row.stops_total == row.stops_served == 0
+    assert row.unserved_count == 0
+    assert row.vehicles_used == 0
+    assert row.distance_m == 0
+    assert row.duration_min == 0
+    assert row.collected_volume_litres == 0
+    assert row.collected_weight_kg == 0
+    # Zero denominators ⇒ null per-stop/per-kg metrics (§5.2.2).
+    assert row.distance_per_stop_m is None
+    assert row.distance_per_kg_m is None
+    assert row.cost_eur_per_day == 0 * 500.0
+    # Fleet recommendation still covers FULL demand (§4.4), not just due stops.
+    assert row.recommended_trucks >= 1
+
+
+def test_observed_service_anchor(comparison: ComparisonResult) -> None:
+    """§4.7 v4/§5.2.4 anchor over the fixture's 7 records (4 series):
+    numeric >= 100 — none; overfull — CMP-3 white x 2 ⇒ 2/7 x 100 = 28.6 %
+    (1 d.p.); max numeric fill = 90.0 (CMP-1's 2026-09-15 record)."""
+    anchor = comparison.run.observed_anchor
+    assert anchor.basis == "observed_emptying_records"
+    assert anchor.share_full_or_overfull_pct == 28.6
+    assert anchor.max_fill_pct == 90.0
+
+
 def test_sweep_all_visits_all_four_series(comparison: ComparisonResult) -> None:
-    sweep_all = comparison.run.scenarios[0]
+    sweep_all = comparison.run.scenarios[1]
     assert sweep_all.status == "complete"
     assert sweep_all.stops_total == 4
     assert sweep_all.stops_served == 4
@@ -72,7 +115,7 @@ def test_sweep_all_visits_all_four_series(comparison: ComparisonResult) -> None:
 
 
 def test_sweep_selected_routes_policy_selected_only(comparison: ComparisonResult) -> None:
-    sweep_selected = comparison.run.scenarios[1]
+    sweep_selected = comparison.run.scenarios[2]
     selected = comparison.run.optimised_median.selection.selected
     assert len(selected) == 2  # 90 and 80 >= threshold 80
     assert len(comparison.run.optimised_median.selection.skipped) == 2
@@ -84,7 +127,7 @@ def test_sweep_selected_routes_policy_selected_only(comparison: ComparisonResult
 
 
 def test_ortools_row_is_the_median_run_pipeline(comparison: ComparisonResult) -> None:
-    ortools_row = comparison.run.scenarios[2]
+    ortools_row = comparison.run.scenarios[3]
     solution = comparison.run.optimised_median.solution
     assert ortools_row.status in ("optimal", "feasible")
     assert ortools_row.status == solution.status
@@ -104,7 +147,7 @@ def test_ortools_row_is_the_median_run_pipeline(comparison: ComparisonResult) ->
 def test_sweep_all_collected_quantities_match_hand_check(
     comparison: ComparisonResult,
 ) -> None:
-    sweep_all = comparison.run.scenarios[0]
+    sweep_all = comparison.run.scenarios[1]
     assert sweep_all.collected_volume_litres == EXPECTED_LITRES_ALL
     assert sweep_all.collected_weight_kg == EXPECTED_KG_ALL
 
@@ -123,11 +166,11 @@ def test_scenario_rows_reconcile_and_echo_demo_fleet(
         assert row.cost_eur_per_day == row.vehicles_used * 500.0
         assert row.cost_eur_per_year == row.cost_eur_per_day * 200
         # Fleet recommendation covers full demand: ceil(5700/12000)=1,
-        # ceil(2850/10000)=1 (demo_truck §4.6) for the all-sweep.
-    assert comparison.run.scenarios[0].recommended_trucks == 1
+        # ceil(2280/10000)=1 (demo_truck §4.6) for the all-sweep.
+    assert comparison.run.scenarios[1].recommended_trucks == 1
     # §5.2.2 fleet_budget: the ortools recommendation priced at the same rates.
     budget = comparison.run.fleet_budget
-    ortools_row = comparison.run.scenarios[2]
+    ortools_row = comparison.run.scenarios[3]
     assert budget.vehicle_type_id == "demo_truck"
     assert budget.trucks == ortools_row.recommended_trucks
     assert budget.cost_eur_per_day == budget.trucks * 500.0
@@ -158,7 +201,7 @@ def test_distance_provenance_labelled_everywhere(comparison: ComparisonResult) -
 
 
 def test_gains_match_scenario_distances(comparison: ComparisonResult) -> None:
-    sweep_all, sweep_selected, ortools_row = comparison.run.scenarios
+    sweep_all, sweep_selected, ortools_row = comparison.run.scenarios[1:]
     gains = comparison.run.gains
     assert gains.selection_gain_m == sweep_all.distance_m - sweep_selected.distance_m
     # The optimised scenario solved to a usable status here, so the routing
@@ -191,14 +234,21 @@ def test_document_labels_and_structure(comparison: ComparisonResult) -> None:
     assert "# Demo numbers" in markdown
     for method in SCENARIO_ORDER:
         assert method in markdown
-    assert "Scenario 1" in markdown and "Scenario 2" in markdown and "Scenario 3" in markdown
+    assert (
+        "Scenario 1" in markdown
+        and "Scenario 2" in markdown
+        and "Scenario 3" in markdown
+        and "Scenario 4" in markdown
+    )
     assert "## Gains" in markdown
     assert "## Optimised determinism" in markdown
     assert "## Fleet budget" in markdown  # §5.2.2 v3 fleet-budget section
+    assert "Observed service anchor" in markdown  # §4.7 v4 status-quo service
     assert "haversine_straight_line_derived" in markdown
     assert 'never "road distance"' in markdown  # AGENTS rule 9 / contract §4.2
     assert "[demo assumption]" in markdown
     assert "[representative]" in markdown  # §4.6 v3 per-value sources
+    assert "[literature]" in markdown  # §4.6 v4 density source
     assert "v3 parameter change" in markdown  # supersession note
     assert "detour factor" in markdown
     assert "python -m src.api.compare_demo" in markdown
@@ -213,7 +263,7 @@ def test_document_labels_and_structure(comparison: ComparisonResult) -> None:
 
 def test_document_numbers_match_the_run(comparison: ComparisonResult) -> None:
     markdown = comparison.markdown
-    sweep_all, sweep_selected, ortools_row = comparison.run.scenarios
+    sweep_all, sweep_selected, ortools_row = comparison.run.scenarios[1:]
     # The document is rendered from the very run under test.
     assert str(sweep_all.distance_m) in markdown
     assert str(sweep_selected.distance_m) in markdown
@@ -222,6 +272,11 @@ def test_document_numbers_match_the_run(comparison: ComparisonResult) -> None:
     assert str(EXPECTED_KG_ALL) in markdown
     assert "1 x demo_truck (ceil_by_volume 1, ceil_by_weight 1)" in markdown
     assert "2 selected / 2 skipped" in markdown
+    # §4.7 v4 observed anchor line (§5.2.4 arithmetic, n_rows denominator):
+    # 2 of 7 records (n_rows) full or overfull = 28.6 %; max numeric fill 90
+    # (CMP-1's last record).
+    assert "28.6 % of emptying records full or overfull" in markdown
+    assert "max observed numeric fill: 90.0 %" in markdown
     gains = comparison.run.gains
     assert str(gains.selection_gain_m) in markdown
     det = comparison.run.optimised_determinism

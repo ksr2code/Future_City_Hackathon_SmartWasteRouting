@@ -68,7 +68,7 @@ straight-line-derived matrices are never called road distance (§4.2).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, NamedTuple, TypeAlias
@@ -87,6 +87,9 @@ from src.routing.schemas import (
     Stop,
     TravelTimeMode,
     VehicleType,
+    effective_collected_volume_litres,
+    effective_collected_weight_kg,
+    effective_service_minutes,
     stop_point_id,
 )
 
@@ -100,6 +103,7 @@ __all__ = [
     "SolutionStatus",
     "SolutionTotals",
     "UnservedStop",
+    "derive_shift_totals",
     "solve",
 ]
 
@@ -151,7 +155,9 @@ class UnservedStop(NamedTuple):
 @dataclass(frozen=True)
 class SolutionTotals:
     """Solution-wide totals — contract §4.3 (``collected_volume_by_material``
-    added v3: per-material litres for compartment visibility, §4.4)."""
+    added v3: per-material litres for compartment visibility, §4.4;
+    ``shift_minutes_used``/``stops_per_shift`` added v4 as [predicted]
+    derived fields — §4.3/§4.4 flat-mode anchor)."""
 
     distance_m: int  # metres [predicted]
     duration_min: int  # minutes [predicted]
@@ -160,6 +166,28 @@ class SolutionTotals:
     collected_weight_kg: int  # kilograms [predicted]
     stops_served: int
     stops_total: int
+    # §4.3 v4 [predicted] derived: max single-route duration (busiest truck).
+    shift_minutes_used: int
+    # §4.3 v4 [predicted] derived: stops_served / vehicles_used, 1 d.p.
+    # (0.0 when no vehicle was used — e.g. an infeasible/empty problem).
+    stops_per_shift: float
+
+
+def derive_shift_totals(
+    route_duration_minutes: Sequence[int], stops_served: int
+) -> tuple[int, float]:
+    """§4.3 v4 derived totals shared by the solver and naive paths (both emit
+    routes with a ``duration_minutes`` field):
+
+    - ``shift_minutes_used`` = max single-route duration (busiest truck), 0
+      when no route was emitted;
+    - ``stops_per_shift`` = ``stops_served / vehicles_used`` rounded to
+      1 decimal place, 0.0 when no vehicle was used.
+    """
+    shift_minutes_used = max(route_duration_minutes, default=0)
+    vehicles_used = len(route_duration_minutes)
+    stops_per_shift = round(stops_served / vehicles_used, 1) if vehicles_used else 0.0
+    return shift_minutes_used, stops_per_shift
 
 
 @dataclass(frozen=True)
@@ -252,7 +280,8 @@ def _build_layout(problem: RoutingProblem, excluded_stop_keys: set[SeriesKey]) -
             continue
         stops_by_node[len(node_point_ids)] = stop
         node_point_ids.append(stop_point_id(stop))
-        service_by_node.append(stop.service_minutes)
+        # §4.2 v4: containers_per_series multiplies the stop's service minutes.
+        service_by_node.append(effective_service_minutes(stop, problem.config))
     return _NodeLayout(
         node_point_ids=node_point_ids,
         stops_by_node=stops_by_node,
@@ -270,10 +299,13 @@ def _vehicle_type_per_vehicle(problem: RoutingProblem) -> list[VehicleType]:
 
 
 def _stop_collected_quantities(stop: Stop, problem: RoutingProblem) -> tuple[int, int]:
-    """(litres, kilograms) the stop contributes — the same derived quantities
-    the load dimensions use (Stop round-half-to-even, densities from config)."""
-    density = problem.config.densities_kg_per_litre[stop.material_type]
-    return stop.collected_volume_litres, stop.collected_weight_kg(density)
+    """(litres, kilograms) the stop contributes — the effective §4.2 v4
+    quantities including ``containers_per_series`` (Stop round-half-to-even,
+    densities from config; never hardcoded)."""
+    return (
+        effective_collected_volume_litres(stop, problem.config),
+        effective_collected_weight_kg(stop, problem.config),
+    )
 
 
 def _build_model(
@@ -578,10 +610,9 @@ def _minimum_round_trip_minutes(stop: Stop, problem: RoutingProblem) -> int:
     index = {point_id: i for i, point_id in enumerate(matrix.point_ids)}
     i_depot = index[problem.depot.id]
     i_stop = index[stop_point_id(stop)]
+    service_min = effective_service_minutes(stop, problem.config)  # §4.2 v4 multiplier
     direct_min = (
-        matrix.duration_min[i_depot][i_stop]
-        + stop.service_minutes
-        + matrix.duration_min[i_stop][i_depot]
+        matrix.duration_min[i_depot][i_stop] + service_min + matrix.duration_min[i_stop][i_depot]
     )
     via_disposal_min = min(
         (
@@ -591,9 +622,7 @@ def _minimum_round_trip_minutes(stop: Stop, problem: RoutingProblem) -> int:
         )
         for site in problem.disposal_sites
     )
-    return min(
-        direct_min, matrix.duration_min[i_depot][i_stop] + stop.service_minutes + via_disposal_min
-    )
+    return min(direct_min, matrix.duration_min[i_depot][i_stop] + service_min + via_disposal_min)
 
 
 def _shift_limit_reason(minimum_trip_min: int, problem: RoutingProblem) -> str:
@@ -647,7 +676,13 @@ def _route_metrics(
         i = index[id_a]
         j = index[id_b]
         distance += matrix.distance_m[i][j]
-        service = 0 if isinstance(node_a, Depot) else node_a.service_minutes
+        if isinstance(node_a, Depot):
+            service = 0
+        elif isinstance(node_a, Stop):
+            # §4.2 v4: containers_per_series multiplies the stop's service.
+            service = effective_service_minutes(node_a, problem.config)
+        else:  # DisposalSite — unload minutes are per visit, never multiplied
+            service = node_a.service_minutes
         duration += matrix.duration_min[i][j] + service
 
     def fresh_materials() -> dict[MaterialType, int]:
@@ -849,6 +884,8 @@ def _empty_totals(problem: RoutingProblem) -> SolutionTotals:
         collected_weight_kg=0,
         stops_served=0,
         stops_total=len(problem.stops),
+        shift_minutes_used=0,
+        stops_per_shift=0.0,
     )
 
 
@@ -966,6 +1003,9 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
     volume_by_material = _zero_volumes_by_material()
     for stop in served_stops:
         volume_by_material[stop.material_type] += _stop_collected_quantities(stop, problem)[0]
+    shift_minutes_used, stops_per_shift = derive_shift_totals(
+        [route.duration_minutes for route in routes], len(served_stops)
+    )
     totals = SolutionTotals(
         distance_m=sum(route.distance_m for route in routes),
         duration_min=sum(route.duration_minutes for route in routes),
@@ -978,6 +1018,8 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
         ),
         stops_served=len(served_stops),
         stops_total=len(problem.stops),
+        shift_minutes_used=shift_minutes_used,
+        stops_per_shift=stops_per_shift,
     )
 
     return RoutingSolution(

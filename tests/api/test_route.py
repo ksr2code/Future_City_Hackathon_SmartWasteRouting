@@ -77,7 +77,8 @@ class TestRoute:
         # Every label carries its §4.6 v3 source: [demo assumption] or
         # [representative] (deployment-setting labels only with env knobs).
         assert all(
-            "[demo assumption]" in label or "[representative]" in label for label in assumptions
+            "[demo assumption]" in label or "[representative]" in label or "[literature]" in label
+            for label in assumptions
         )
         joined = "\n".join(assumptions)
         assert "synthetic" in joined.lower()  # synthetic geography labelled
@@ -201,6 +202,70 @@ class TestRoute:
         by_material = body["solution"]["totals"]["collected_volume_by_material"]
         assert set(by_material) == {"brown", "green", "white"}
         assert sum(by_material.values()) == body["solution"]["totals"]["collected_volume_litres"]
+
+    def test_route_totals_shift_derivations(self, client: TestClient) -> None:
+        """§4.3 v4 [predicted] derived passthrough (solver.derive_shift_totals):
+        shift_minutes_used is the busiest route's duration (max over routes;
+        0 when no route exists) and stops_per_shift is
+        round(stops_served / vehicles_used, 1) with one route per used
+        vehicle."""
+        upload_csv(client)
+        body = client.post("/api/route", json={"as_of_date": AS_OF}).json()
+        solution = body["solution"]
+        routes = solution["routes"]
+        totals = solution["totals"]
+        if routes:
+            assert totals["shift_minutes_used"] == max(
+                route["duration_minutes"] for route in routes
+            )
+            assert totals["stops_per_shift"] == round(totals["stops_served"] / len(routes), 1)
+        else:
+            assert totals["shift_minutes_used"] == 0
+            assert totals["stops_per_shift"] == 0.0
+
+    def test_route_containers_per_series_override_doubles_volume(self, client: TestClient) -> None:
+        """§4.2 v4: containers_per_series=2 doubles the collected litres
+        (per-container volume x 2; the predicted fill % is the series
+        aggregate and unchanged). The doubled load still fits one truck by
+        also doubling the vehicle capacities (compartments must sum to the
+        volume capacity, §4.2), so the served set is identical."""
+        upload_csv(client)
+        base = client.post("/api/route", json={"as_of_date": AS_OF}).json()
+        doubled = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {
+                    "containers_per_series": 2,
+                    "vehicle_volume_capacity_litres": 24_000,
+                    "vehicle_compartment_volume_litres": {
+                        "brown": 8000,
+                        "green": 8000,
+                        "white": 8000,
+                    },
+                },
+            },
+        ).json()
+        assert doubled["solution"]["status"] in {"optimal", "feasible"}
+        base_volume = base["solution"]["totals"]["collected_volume_litres"]
+        doubled_volume = doubled["solution"]["totals"]["collected_volume_litres"]
+        assert base_volume > 0
+        assert doubled_volume == 2 * base_volume
+        assert (
+            doubled["solution"]["totals"]["stops_served"]
+            == base["solution"]["totals"]["stops_served"]
+        )
+
+    def test_route_frequency_days_zero_422(self, client: TestClient) -> None:
+        """§4.2 v4: frequency_days must be an int >= 1 — the RoutingConfig
+        constructor message surfaces on 422 (§5.3)."""
+        upload_csv(client)
+        response = client.post(
+            "/api/route",
+            json={"as_of_date": AS_OF, "routing_config": {"frequency_days": 0}},
+        )
+        assert response.status_code == 422
+        assert "frequency_days" in response.json()["detail"]
 
     def test_route_compartment_sum_mismatch_422(self, client: TestClient) -> None:
         """§4.2: compartments must sum to the volume capacity — the domain

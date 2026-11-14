@@ -12,15 +12,20 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from src.data.schema import MATERIALS
 from src.routing.demo_config import (
     DEMO_AVG_SPEED_KMH,
     DEMO_CONTAINER_VOLUME_LITRES,
+    DEMO_CONTAINERS_PER_SERIES,
     DEMO_COST_PER_TRUCK_DAY_EUR,
     DEMO_DENSITIES_KG_PER_LITRE,
+    DEMO_DENSITY_SOURCE_LABEL,
     DEMO_DETOUR_FACTOR,
     DEMO_DISPOSAL_SERVICE_MINUTES,
     DEMO_FIXED_TRAVEL_MINUTES,
+    DEMO_FREQUENCY_DAYS,
     DEMO_GEOGRAPHY_SEED,
     DEMO_GEOGRAPHY_SPREAD_KM,
     DEMO_MAX_SHIFT_MINUTES,
@@ -39,6 +44,7 @@ from src.routing.demo_config import (
     demo_routing_config,
     demo_vehicle_type,
 )
+from src.routing.schemas import RoutingConfig, RoutingSchemaError
 
 
 def test_container_volume_default_is_3000_litres() -> None:
@@ -46,10 +52,26 @@ def test_container_volume_default_is_3000_litres() -> None:
     assert DEMO_CONTAINER_VOLUME_LITRES == 3000
 
 
-def test_densities_default_is_05_uniform() -> None:
-    """§4.6: 0.5 kg/L uniform for brown/green/white [demo assumption]."""
-    assert DEMO_DENSITIES_KG_PER_LITRE == {"brown": 0.5, "green": 0.5, "white": 0.5}
+def test_densities_default_is_040_uniform_literature() -> None:
+    """§4.6 v4: 0.40 kg/L uniform for brown/green/white, [literature] AVV
+    20 01 02 (0.40 t/m³; partner's 380 kg/m³ corroborates within 5 %)."""
+    assert DEMO_DENSITIES_KG_PER_LITRE == {"brown": 0.4, "green": 0.4, "white": 0.4}
     assert set(DEMO_DENSITIES_KG_PER_LITRE) == set(MATERIALS)
+
+
+def test_density_source_label_is_exact() -> None:
+    """The §4.6 v4 [literature] label must travel with every echo of the
+    density default (overrides never relabel facts)."""
+    assert DEMO_DENSITY_SOURCE_LABEL == (
+        "[literature] German AVV table AVV 20 01 02 (entsorgen-versorgen.de, retrieved 2026-11-14)"
+    )
+
+
+def test_v4_knobs_defaults() -> None:
+    """§4.2/§4.6 v4: one container per series [demo assumption — Q11] and a
+    28-day fixed-frequency cycle (observed median gap) [demo assumption]."""
+    assert DEMO_CONTAINERS_PER_SERIES == 1
+    assert DEMO_FREQUENCY_DAYS == 28
 
 
 def test_vehicle_defaults_match_contract() -> None:
@@ -137,9 +159,9 @@ def test_demo_routing_config_matches_all_defaults() -> None:
     config = demo_routing_config()
     assert config.max_shift_minutes == 480
     assert config.densities_kg_per_litre == {
-        "brown": 0.5,
-        "green": 0.5,
-        "white": 0.5,
+        "brown": 0.4,
+        "green": 0.4,
+        "white": 0.4,
     }
     assert config.detour_factor == 1.4
     assert config.avg_speed_kmh == 30
@@ -152,6 +174,9 @@ def test_demo_routing_config_matches_all_defaults() -> None:
     assert config.operating_days_per_year == 200
     assert config.geography_seed == 0
     assert config.geography_spread_km == 6.0
+    # §4.2/§4.6 v4 knobs.
+    assert config.containers_per_series == 1
+    assert config.frequency_days == 28
 
 
 def test_demo_routing_config_validates_and_covers_materials() -> None:
@@ -168,4 +193,33 @@ def test_factories_return_fresh_instances() -> None:
     second = demo_routing_config()
     assert first is not second
     first.densities_kg_per_litre["brown"] = 99.0
-    assert second.densities_kg_per_litre["brown"] == 0.5
+    assert second.densities_kg_per_litre["brown"] == 0.4
+
+
+def test_v4_config_fields_reject_non_positive() -> None:
+    """§4.2 v4 validation: containers_per_series and frequency_days are
+    ints >= 1 (0, negatives, bools and non-ints rejected)."""
+    base = demo_routing_config()
+
+    def with_field(**overrides: int) -> RoutingConfig:
+        return RoutingConfig(
+            max_shift_minutes=base.max_shift_minutes,
+            densities_kg_per_litre=base.densities_kg_per_litre,
+            detour_factor=base.detour_factor,
+            avg_speed_kmh=base.avg_speed_kmh,
+            containers_per_series=overrides.get(
+                "containers_per_series", base.containers_per_series
+            ),
+            frequency_days=overrides.get("frequency_days", base.frequency_days),
+        )
+
+    for bad in (0, -1):
+        with pytest.raises(RoutingSchemaError, match="containers_per_series"):
+            with_field(containers_per_series=bad)
+        with pytest.raises(RoutingSchemaError, match="frequency_days"):
+            with_field(frequency_days=bad)
+    for bad_type in (True, 1.5, "2"):
+        with pytest.raises(RoutingSchemaError, match="containers_per_series"):
+            with_field(containers_per_series=bad_type)  # type: ignore[arg-type]
+        with pytest.raises(RoutingSchemaError, match="frequency_days"):
+            with_field(frequency_days=bad_type)  # type: ignore[arg-type]

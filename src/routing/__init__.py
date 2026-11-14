@@ -16,11 +16,14 @@ from __future__ import annotations
 from src.routing.demo_config import (
     DEMO_AVG_SPEED_KMH,
     DEMO_CONTAINER_VOLUME_LITRES,
+    DEMO_CONTAINERS_PER_SERIES,
     DEMO_COST_PER_TRUCK_DAY_EUR,
     DEMO_DENSITIES_KG_PER_LITRE,
+    DEMO_DENSITY_SOURCE_LABEL,
     DEMO_DETOUR_FACTOR,
     DEMO_DISPOSAL_SERVICE_MINUTES,
     DEMO_FIXED_TRAVEL_MINUTES,
+    DEMO_FREQUENCY_DAYS,
     DEMO_GEOGRAPHY_SEED,
     DEMO_GEOGRAPHY_SPREAD_KM,
     DEMO_MAX_SHIFT_MINUTES,
@@ -51,6 +54,11 @@ from src.routing.geography import (
     haversine_distance_m,
     synthetic_stop_coordinates,
 )
+from src.routing.naive import (
+    METHOD_NAIVE_FIXED_FREQUENCY,
+    due_series_keys,
+    naive_fixed_frequency_simulation,
+)
 from src.routing.schemas import (
     TRAVEL_MODE_FIXED_PER_LEG,
     TRAVEL_MODE_HAVERSINE_DERIVED,
@@ -64,6 +72,9 @@ from src.routing.schemas import (
     TravelMatrix,
     TravelTimeMode,
     VehicleType,
+    effective_collected_volume_litres,
+    effective_collected_weight_kg,
+    effective_service_minutes,
     stop_point_id,
 )
 from src.routing.solver import (
@@ -75,17 +86,21 @@ from src.routing.solver import (
     SolutionStatus,
     SolutionTotals,
     UnservedStop,
+    derive_shift_totals,
     solve,
 )
 
 __all__ = [
     "DEMO_AVG_SPEED_KMH",
+    "DEMO_CONTAINERS_PER_SERIES",
     "DEMO_CONTAINER_VOLUME_LITRES",
     "DEMO_COST_PER_TRUCK_DAY_EUR",
     "DEMO_DENSITIES_KG_PER_LITRE",
+    "DEMO_DENSITY_SOURCE_LABEL",
     "DEMO_DETOUR_FACTOR",
     "DEMO_DISPOSAL_SERVICE_MINUTES",
     "DEMO_FIXED_TRAVEL_MINUTES",
+    "DEMO_FREQUENCY_DAYS",
     "DEMO_GEOGRAPHY_SEED",
     "DEMO_GEOGRAPHY_SPREAD_KM",
     "DEMO_MAX_SHIFT_MINUTES",
@@ -99,6 +114,7 @@ __all__ = [
     "DEMO_VEHICLE_ID",
     "DEMO_VEHICLE_VOLUME_CAPACITY_LITRES",
     "DEMO_VEHICLE_WEIGHT_CAPACITY_KG",
+    "METHOD_NAIVE_FIXED_FREQUENCY",
     "TRAVEL_MODES",
     "TRAVEL_MODE_FIXED_PER_LEG",
     "TRAVEL_MODE_HAVERSINE_DERIVED",
@@ -127,8 +143,14 @@ __all__ = [
     "demo_disposal_site",
     "demo_routing_config",
     "demo_vehicle_type",
+    "derive_shift_totals",
+    "due_series_keys",
+    "effective_collected_volume_litres",
+    "effective_collected_weight_kg",
+    "effective_service_minutes",
     "fleet_recommendation",
     "haversine_distance_m",
+    "naive_fixed_frequency_simulation",
     "recommend_fleet_for_problem",
     "solve",
     "stop_point_id",

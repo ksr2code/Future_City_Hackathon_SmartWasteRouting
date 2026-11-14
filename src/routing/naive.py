@@ -53,16 +53,20 @@ hidden).
 
 Output mirrors the contract §4.3 keys (``totals``, ``unserved``,
 ``fleet_recommendation``, ``distance_provenance``) plus ``method`` =
-``"naive_fixed_order"`` or ``"naive_sweep_order"``. Distance provenance is
-echoed from the travel matrix untouched — straight-line-derived matrices are
-never presented as road distance (contract §4.2).
+``"naive_fixed_order"`` (docs/tests only), ``"naive_sweep_order"`` (§4.7 v2
+scenarios) or ``"naive_fixed_frequency"`` (§4.7 v4 status quo: only series
+due under the fixed ``frequency_days`` cycle, :func:`due_series_keys`).
+Distance provenance is echoed from the travel matrix untouched —
+straight-line-derived matrices are never presented as road distance
+(contract §4.2).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal, TypeAlias
 
 from src.data.schema import MATERIALS, MaterialType
@@ -75,17 +79,23 @@ from src.routing.schemas import (
     RoutingProblem,
     Stop,
     VehicleType,
+    effective_collected_volume_litres,
+    effective_collected_weight_kg,
+    effective_service_minutes,
     stop_point_id,
 )
-from src.routing.solver import SolutionTotals, UnservedStop
+from src.routing.solver import SolutionTotals, UnservedStop, derive_shift_totals
 
 __all__ = [
+    "METHOD_NAIVE_FIXED_FREQUENCY",
     "METHOD_NAIVE_FIXED_ORDER",
     "METHOD_NAIVE_SWEEP_ORDER",
     "SWEEP_CELL_SIZE_DEG",
     "NaiveRoute",
     "NaiveSolution",
     "NaiveStatus",
+    "due_series_keys",
+    "naive_fixed_frequency_simulation",
     "naive_fixed_order_simulation",
     "naive_sweep_simulation",
     "sweep_visit_order",
@@ -93,8 +103,12 @@ __all__ = [
 
 METHOD_NAIVE_FIXED_ORDER: Literal["naive_fixed_order"] = "naive_fixed_order"
 METHOD_NAIVE_SWEEP_ORDER: Literal["naive_sweep_order"] = "naive_sweep_order"
+# §4.7 v4 status-quo scenario: only series DUE under the fixed k-day cycle
+# (as_of - last_emptying_date >= frequency_days; no last date ⇒ due), visited
+# in the same area-sweep order.
+METHOD_NAIVE_FIXED_FREQUENCY: Literal["naive_fixed_frequency"] = "naive_fixed_frequency"
 
-NaiveMethod: TypeAlias = Literal["naive_fixed_order", "naive_sweep_order"]
+NaiveMethod: TypeAlias = Literal["naive_fixed_order", "naive_sweep_order", "naive_fixed_frequency"]
 
 # §4.7 area-sweep grid cell size in degrees (≈ 1 km) [demo assumption — the
 # data has no area field, observed; every visiting order is a labelled choice].
@@ -213,7 +227,6 @@ def _simulate_order(
     distance_m = matrix.distance_m
     duration_min = matrix.duration_min
     max_shift = problem.config.max_shift_minutes
-    densities = problem.config.densities_kg_per_litre
     depot = problem.depot
 
     def dist(a_pid: str, b_pid: str) -> int:
@@ -310,8 +323,11 @@ def _simulate_order(
 
         stop = ordered_stops[stop_cursor]
         stop_pid = stop_point_id(stop)
-        collected_volume = stop.collected_volume_litres
-        collected_weight = stop.collected_weight_kg(densities[stop.material_type])
+        # §4.2 v4: containers_per_series multiplies litres collected, weight
+        # and the stop's service minutes (predictive fill % unchanged).
+        collected_volume = effective_collected_volume_litres(stop, problem.config)
+        collected_weight = effective_collected_weight_kg(stop, problem.config)
+        service_min = effective_service_minutes(stop, problem.config)
 
         # 1) A stop that cannot fit even an empty vehicle is never servable.
         # §4.2 v3: the binding volume bound is the stop material's COMPARTMENT
@@ -347,10 +363,10 @@ def _simulate_order(
                 minutes(pos_pid, disposal.id)
                 + disposal.service_minutes
                 + minutes(disposal.id, stop_pid)
-                + stop.service_minutes
+                + service_min
             )
         else:
-            needed_min = minutes(pos_pid, stop_pid) + stop.service_minutes
+            needed_min = minutes(pos_pid, stop_pid) + service_min
 
         # 3) Shift: when the next leg + service would exceed the cap, return
         # to the depot; the next vehicle continues with the same stop.
@@ -380,7 +396,7 @@ def _simulate_order(
             weight = 0
             pos_pid = disposal.id
         route_distance += dist(pos_pid, stop_pid)
-        elapsed += minutes(pos_pid, stop_pid) + stop.service_minutes
+        elapsed += minutes(pos_pid, stop_pid) + service_min
         sequence.append(stop)
         volume_by_material[stop.material_type] += collected_volume
         weight += collected_weight
@@ -394,17 +410,26 @@ def _simulate_order(
     served_stops = [node for route in routes for node in route.sequence if isinstance(node, Stop)]
     served_volume_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
     for stop in served_stops:
-        served_volume_by_material[stop.material_type] += stop.collected_volume_litres
+        served_volume_by_material[stop.material_type] += effective_collected_volume_litres(
+            stop, problem.config
+        )
+    shift_minutes_used, stops_per_shift = derive_shift_totals(
+        [route.duration_minutes for route in routes], len(served_stops)
+    )
     totals = SolutionTotals(
         distance_m=sum(route.distance_m for route in routes),
         duration_min=sum(route.duration_minutes for route in routes),
-        collected_volume_litres=sum(stop.collected_volume_litres for stop in served_stops),
+        collected_volume_litres=sum(
+            effective_collected_volume_litres(stop, problem.config) for stop in served_stops
+        ),
         collected_volume_by_material=served_volume_by_material,
         collected_weight_kg=sum(
-            stop.collected_weight_kg(densities[stop.material_type]) for stop in served_stops
+            effective_collected_weight_kg(stop, problem.config) for stop in served_stops
         ),
         stops_served=len(served_stops),
         stops_total=len(ordered_stops),
+        shift_minutes_used=shift_minutes_used,
+        stops_per_shift=stops_per_shift,
     )
 
     return NaiveSolution(
@@ -452,3 +477,71 @@ def naive_sweep_simulation(
     """
     ordered = sweep_visit_order(problem.stops if stops is None else stops)
     return _simulate_order(problem, ordered, no_forecast_stop_keys, METHOD_NAIVE_SWEEP_ORDER)
+
+
+def _is_due(last_date: date | None, as_of: date, frequency_days: int) -> bool:
+    """§4.7 v4 due rule for one series: no last emptying date ⇒ due (never
+    collected), otherwise due iff ``as_of - last_date >= k`` days."""
+    return last_date is None or (as_of - last_date).days >= frequency_days
+
+
+def due_series_keys(
+    last_emptying_dates: Mapping[SeriesKey, date | None],
+    as_of: date,
+    frequency_days: int,
+) -> set[SeriesKey]:
+    """§4.7 v4 status-quo due-set (pure): a series is **due** iff
+    ``as_of - last_emptying_date >= frequency_days`` days; a series with no
+    last emptying date (``None``) is **due** too (never collected ⇒ must be
+    visited). A last date after ``as_of`` (negative gap) is never due. The
+    set covers exactly the series present in ``last_emptying_dates``;
+    :func:`naive_fixed_frequency_simulation` additionally treats problem
+    stops ABSENT from the mapping as due (§4.7: no last date ⇒ due).
+    ``frequency_days`` must be >= 1 (§4.2 v4: ``RoutingConfig.frequency_days``
+    default 28 [demo assumption]).
+
+    Deterministic: same inputs ⇒ identical set (set ordering is not part of
+    the contract; the scenario visits due stops in area-sweep order).
+    """
+    if isinstance(frequency_days, bool) or not isinstance(frequency_days, int):
+        raise ValueError(f"frequency_days must be an int >= 1, got {type(frequency_days).__name__}")
+    if frequency_days < 1:
+        raise ValueError(f"frequency_days must be >= 1, got {frequency_days}")
+    return {
+        key
+        for key, last_date in last_emptying_dates.items()
+        if _is_due(last_date, as_of, frequency_days)
+    }
+
+
+def naive_fixed_frequency_simulation(
+    problem: RoutingProblem,
+    last_emptying_dates: Mapping[SeriesKey, date | None],
+    as_of: date,
+    no_forecast_stop_keys: Sequence[SeriesKey] = (),
+    frequency_days: int | None = None,
+) -> NaiveSolution:
+    """§4.7 v4 ``naive_fixed_frequency`` status-quo scenario: visit only the
+    problem stops whose series is **due** under the fixed k-day cycle (see
+    :func:`due_series_keys`), in the same §4.7 area-sweep order and with the
+    identical simulation physics as the other naive scenarios (capacities,
+    nearest-disposal unload, shift hand-over, fleet exhaustion — never silent
+    drops, §4.4).
+
+    ``frequency_days`` defaults to ``problem.config.frequency_days`` (§4.2
+    v4, default 28 [demo assumption]) so the scenario always shares the
+    request's effective physics. Problem stops ABSENT from
+    ``last_emptying_dates`` count as "no last date" and are due (§4.7).
+    Deterministic: same inputs ⇒ identical :class:`NaiveSolution`."""
+    resolved_frequency = problem.config.frequency_days if frequency_days is None else frequency_days
+    due_stops = [
+        stop
+        for stop in problem.stops
+        if _is_due(
+            last_emptying_dates.get((stop.location_id, stop.material_type)),
+            as_of,
+            resolved_frequency,
+        )
+    ]
+    ordered = sweep_visit_order(due_stops)
+    return _simulate_order(problem, ordered, no_forecast_stop_keys, METHOD_NAIVE_FIXED_FREQUENCY)

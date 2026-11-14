@@ -40,6 +40,9 @@ __all__ = [
     "TravelMatrix",
     "TravelTimeMode",
     "VehicleType",
+    "effective_collected_volume_litres",
+    "effective_collected_weight_kg",
+    "effective_service_minutes",
     "stop_point_id",
 ]
 
@@ -274,6 +277,31 @@ class Stop:
         return round(self.collected_volume_litres * density_kg_per_litre)
 
 
+def effective_service_minutes(stop: Stop, config: RoutingConfig) -> int:
+    """Stop service minutes actually paid — §4.2 v4: ``containers_per_series``
+    (int >= 1 [demo assumption — Q11]) stands for N same-colour containers at
+    one site, and EVERY container pays its own emptying minutes, so the stop's
+    service time scales with N (``stop.service_minutes x N``). The predicted
+    fill % is the series aggregate and does NOT change (the data cannot see
+    same-colour duplicates at one site)."""
+    return stop.service_minutes * config.containers_per_series
+
+
+def effective_collected_volume_litres(stop: Stop, config: RoutingConfig) -> int:
+    """Litres actually collected at the stop — §4.2 v4: the per-container
+    collected volume (:attr:`Stop.collected_volume_litres`, fill % unchanged)
+    times ``containers_per_series``."""
+    return stop.collected_volume_litres * config.containers_per_series
+
+
+def effective_collected_weight_kg(stop: Stop, config: RoutingConfig) -> int:
+    """Kilograms actually collected at the stop — density x effective litres
+    (nearest kilogram, ties-to-even). Densities come from
+    :attr:`RoutingConfig.densities_kg_per_litre` — never hardcoded."""
+    density = config.densities_kg_per_litre[stop.material_type]
+    return round(effective_collected_volume_litres(stop, config) * density)
+
+
 @dataclass(frozen=True)
 class RoutingConfig:
     """Solver/matrix configuration — contract §4.2 (v3). Field sources are
@@ -325,6 +353,14 @@ class RoutingConfig:
     geography_spread_km: float = (
         6.0  # km; outer radius of the 1..spread band [demo assumption knob]
     )
+    # §4.2/§4.6 v4 (2026-11-14): containers_per_series multiplies the litres
+    # collected AND the stop service minutes (N same-colour containers per
+    # site); the predicted fill % is the series aggregate and does NOT change
+    # [demo assumption — Q11]. frequency_days is the §4.7/§5.2.4
+    # naive_fixed_frequency cycle length (§4.6 default 28, observed median
+    # gap) [demo assumption].
+    containers_per_series: int = 1  # int >= 1 [demo assumption — Q11]
+    frequency_days: int = 28  # days, int >= 1 [demo assumption]
 
     def __post_init__(self) -> None:
         _require_positive_int("RoutingConfig.max_shift_minutes", self.max_shift_minutes)
@@ -381,6 +417,8 @@ class RoutingConfig:
         if self.geography_seed < 0:
             raise RoutingSchemaError(f"geography_seed must be >= 0, got {self.geography_seed}")
         _require_positive_number("RoutingConfig.geography_spread_km", self.geography_spread_km)
+        _require_positive_int("RoutingConfig.containers_per_series", self.containers_per_series)
+        _require_positive_int("RoutingConfig.frequency_days", self.frequency_days)
 
 
 @dataclass(frozen=True)

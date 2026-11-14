@@ -58,9 +58,11 @@ class TestForecasts:
             for f in body["forecasts"]
             if (f["location_id"], f["material_type"]) == ("loc-a", "brown")
         )
-        # 90 + median(2.5 pp/day) x 28 d = 160 -> clipped to 100 (§2.3).
-        assert brown_a["predicted_fill_pct"] == 100.0
-        assert brown_a["predicted_state"] == "full"
+        # §2.3 v2: rate candidates 50/14 and 90/14 (fill/interval over the
+        # two 14-day gaps) -> median rate 5.0 pp/day x median interval
+        # 14 d = 70.0, within [0,100] (§2.3; no clipping needed).
+        assert brown_a["predicted_fill_pct"] == 70.0
+        assert brown_a["predicted_state"] == "normal"
 
     def test_forecasts_explicit_horizon_sets_target_date(self, client: TestClient) -> None:
         upload_csv(client)
