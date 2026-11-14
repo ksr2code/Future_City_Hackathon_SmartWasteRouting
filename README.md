@@ -1,4 +1,4 @@
-# WasteRouting.AI
+# SmartWasteRouting
 
 Explainable glass-waste collection forecasting and route-optimisation prototype
 for the PreZero / City of Heilbronn challenge. See `PLAN.md` for milestones and
