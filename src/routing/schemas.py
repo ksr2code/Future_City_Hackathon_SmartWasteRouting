@@ -1,18 +1,20 @@
-"""Routing input schemas (M8) — docs/contracts.md §4.1/§4.2/§4.4.
+"""Routing input schemas (M8) — docs/contracts.md §4.1/§4.2/§4.4 (v3).
 
 Frozen stdlib dataclasses, validated at construction; invalid values raise
 :class:`RoutingSchemaError` before any routing can run. Field units are
 explicit per contract §4.1: litres, kilograms, metres, minutes, percent,
-WGS84 degrees, km/h, kg/litre.
+WGS84 degrees, km/h, kg/litre, euros.
 
 Provenance labels: the challenge brief (§3, audited 2026-11-14) names the
 variable *categories* but supplies **no values**, and the data contains no
-coordinates, capacities or densities (contract §4.5). Every numeric value
-therefore enters through config (``src/routing/demo_config.py``), where each
-default is labelled **[demo assumption]**; nothing here is presented as an
-observed fact. ``TravelMatrix.provenance`` keeps the distance derivation
-visible — straight-line-derived matrices are never called road distance
-(AGENTS rule 9 / contract §4.2).
+coordinates, capacities or densities (contract §4.5). Part of the §4.6 v3
+defaults (2026-11-14) are **[representative]** — verbal values from the
+challenge representative; the rest are **[demo assumption]**. Every numeric
+value enters through config (``src/routing/demo_config.py``), where each
+default carries its source label; nothing here is presented as an observed
+fact. ``TravelMatrix.provenance`` keeps the distance derivation visible —
+straight-line-derived matrices are never called road distance (AGENTS
+rule 9 / contract §4.2).
 
 Deterministic: no randomness; ordering guarantees are provided by the
 builders in :mod:`src.routing.geography`.
@@ -26,6 +28,9 @@ from typing import Literal, TypeAlias
 from src.data.schema import MATERIALS, MaterialType
 
 __all__ = [
+    "TRAVEL_MODES",
+    "TRAVEL_MODE_FIXED_PER_LEG",
+    "TRAVEL_MODE_HAVERSINE_DERIVED",
     "Depot",
     "DisposalSite",
     "RoutingConfig",
@@ -33,6 +38,7 @@ __all__ = [
     "RoutingSchemaError",
     "Stop",
     "TravelMatrix",
+    "TravelTimeMode",
     "VehicleType",
     "stop_point_id",
 ]
@@ -44,6 +50,21 @@ supplied. There is no road network source in the data [observed], so a
 
 PROVENANCE_HAVERSINE: Provenance = "haversine_straight_line_derived"
 PROVENANCE_EXTERNAL: Provenance = "external"
+
+TravelTimeMode: TypeAlias = Literal["fixed_per_leg", "haversine_derived"]
+"""Duration mode (§4.2 v3): ``fixed_per_leg`` puts the configured fixed
+minutes on EVERY leg incl. depot/disposal legs [representative reading of
+"10 min between containers"; the depot/disposal inclusion is an open
+question, surfaced in docs/open_questions.md]; ``haversine_derived`` derives
+durations from straight-line-derived distance and the configured average
+speed. Distances are haversine x detour in BOTH modes — never road."""
+
+TRAVEL_MODE_FIXED_PER_LEG: TravelTimeMode = "fixed_per_leg"
+TRAVEL_MODE_HAVERSINE_DERIVED: TravelTimeMode = "haversine_derived"
+TRAVEL_MODES: tuple[TravelTimeMode, ...] = (
+    TRAVEL_MODE_FIXED_PER_LEG,
+    TRAVEL_MODE_HAVERSINE_DERIVED,
+)
 
 WGS84_LAT_MIN = -90.0  # degrees
 WGS84_LAT_MAX = 90.0  # degrees
@@ -156,13 +177,19 @@ class DisposalSite:
 class VehicleType:
     """Fleet type with volume and weight capacity — contract §4.2. All
     capacities and the count are [demo assumption] (brief names vehicle
-    categories only)."""
+    categories only). One truck serves ALL materials, collected separated
+    [representative]; ``compartment_volume_litres`` pins the per-material
+    compartment layout: ``None`` ⇒ equal thirds of ``volume_capacity_litres``
+    [demo assumption — layout unknown]; explicit values must cover exactly
+    the three observed materials, each > 0, and sum to the volume capacity
+    (§4.2). Use :meth:`compartment_capacities` for the resolved layout."""
 
     id: str
     name: str
     volume_capacity_litres: int  # litres [demo assumption]
     weight_capacity_kg: int  # kilograms [demo assumption]
     count_available: int  # vehicles of this type, int > 0 [demo assumption]
+    compartment_volume_litres: dict[MaterialType, int] | None = None  # litres per material
 
     def __post_init__(self) -> None:
         _require_non_empty_str("VehicleType.id", self.id)
@@ -170,6 +197,41 @@ class VehicleType:
         _require_positive_int("VehicleType.volume_capacity_litres", self.volume_capacity_litres)
         _require_positive_int("VehicleType.weight_capacity_kg", self.weight_capacity_kg)
         _require_positive_int("VehicleType.count_available", self.count_available)
+        if self.compartment_volume_litres is None:
+            return
+        compartments = self.compartment_volume_litres
+        if set(compartments) != set(MATERIALS):
+            raise RoutingSchemaError(
+                "compartment_volume_litres must contain exactly the observed materials "
+                f"{sorted(MATERIALS)}, got {sorted(compartments)}"
+            )
+        for material, litres in compartments.items():
+            _require_positive_int(f"compartment_volume_litres[{material}]", litres)
+        if sum(compartments.values()) != self.volume_capacity_litres:
+            raise RoutingSchemaError(
+                "compartment volumes must sum to volume_capacity_litres: "
+                f"{sorted(compartments.values())} sums to {sum(compartments.values())}, "
+                f"expected {self.volume_capacity_litres}"
+            )
+
+    def compartment_capacities(self) -> dict[MaterialType, int]:
+        """Resolved per-material compartment capacities in litres.
+
+        Explicit layout echoes the validated dict (fresh dict per call —
+        frozen dataclass, the input dict stays mutable). ``None`` resolves to
+        equal thirds of ``volume_capacity_litres`` [demo assumption — layout
+        unknown]: ``capacity // 3`` per material with the remainder litres
+        added to the first materials in observed MATERIALS order, so the
+        compartments always sum exactly to the volume capacity (e.g.
+        12,000 L → 4,000/4,000/4,000; 1,000 L → 334/333/333)."""
+        if self.compartment_volume_litres is not None:
+            return dict(self.compartment_volume_litres)
+        base = self.volume_capacity_litres // 3
+        remainder = self.volume_capacity_litres % 3
+        return {
+            material: base + (1 if position < remainder else 0)
+            for position, material in enumerate(MATERIALS)
+        }
 
 
 @dataclass(frozen=True)
@@ -214,12 +276,20 @@ class Stop:
 
 @dataclass(frozen=True)
 class RoutingConfig:
-    """Solver/matrix configuration — contract §4.2. Every field is [demo
-    assumption] (§4.6 user-agreed defaults live in
-    ``src/routing/demo_config.py``); all are request-overridable at M10.
+    """Solver/matrix configuration — contract §4.2 (v3). Field sources are
+    labelled per value (§4.6 v3: [representative] vs [demo assumption]);
+    §4.6 defaults live in ``src/routing/demo_config.py``; all are
+    request-overridable at M10.
 
     ``densities_kg_per_litre`` must contain exactly the three observed
     materials (brown/green/white) with positive values.
+
+    ``travel_time_mode`` selects the matrix duration derivation (§4.2 v3):
+    ``fixed_per_leg`` (default) puts ``fixed_travel_minutes`` on EVERY leg
+    incl. depot/disposal legs; ``haversine_derived`` keeps the previous
+    distance/speed derivation. Distances are haversine x detour in both
+    modes — never road. ``avg_speed_kmh``/``detour_factor`` matter only in
+    ``haversine_derived`` mode.
 
     v2 determinism protocol (§4.4/§4.7, user-approved 2026-11-14):
     ``solver_solution_limit`` (int >= 1) is the **primary stopping criterion**
@@ -227,15 +297,34 @@ class RoutingConfig:
     solves that reach it return identical results. ``solver_time_limit_s``
     is a **safety cap only**: if it fires before the solution budget, the
     solve is reported as ``timeout`` (explicitly non-reproducible, §4.7).
+
+    Cost/operating fields (``cost_per_truck_day_eur``,
+    ``operating_days_per_week``, ``operating_days_per_year``) are echo/
+    display parameters for the derived §4.3 cost block — never invoiced
+    amounts (§4.4). Calendar range bounds ([1, 7] / [1, 366]) are physical
+    facts, not invented thresholds.
     """
 
-    max_shift_minutes: int  # minutes [demo assumption, brief §3 category]
+    max_shift_minutes: int  # minutes [representative: 480 = 8 h, §4.6 v3]
     densities_kg_per_litre: dict[MaterialType, float]  # kg/litre [demo assumption]
     detour_factor: float  # dimensionless >= 1 [demo assumption]
-    avg_speed_kmh: float  # km/h [demo assumption]
+    avg_speed_kmh: float  # km/h [demo assumption]; haversine_derived mode only
     # §4.6 v2 defaults (200 solutions / 30.0 s), both [demo assumption].
     solver_solution_limit: int = 200
     solver_time_limit_s: float = 30.0
+    # §4.6 v3 defaults (2026-11-14): travel/cost/operating values are
+    # [representative] (verbal, challenge representative); geography knobs
+    # are [demo assumption] sensitivity knobs — seed 0 / spread 6.0 reproduce
+    # the current synthetic layout exactly (regression-tested, §4.6).
+    travel_time_mode: TravelTimeMode = TRAVEL_MODE_FIXED_PER_LEG  # [representative]
+    fixed_travel_minutes: int = 10  # minutes per leg [representative]; fixed_per_leg only
+    cost_per_truck_day_eur: float = 500.0  # euros [representative]
+    operating_days_per_week: int = 5  # days/week [representative] (echo/display)
+    operating_days_per_year: int = 200  # days/year [representative] (echo/display)
+    geography_seed: int = 0  # int >= 0; 0 = current SHA-256 layout [demo assumption knob]
+    geography_spread_km: float = (
+        6.0  # km; outer radius of the 1..spread band [demo assumption knob]
+    )
 
     def __post_init__(self) -> None:
         _require_positive_int("RoutingConfig.max_shift_minutes", self.max_shift_minutes)
@@ -257,6 +346,41 @@ class RoutingConfig:
         _require_positive_number("RoutingConfig.avg_speed_kmh", self.avg_speed_kmh)
         _require_positive_int("RoutingConfig.solver_solution_limit", self.solver_solution_limit)
         _require_positive_number("RoutingConfig.solver_time_limit_s", self.solver_time_limit_s)
+        if self.travel_time_mode not in TRAVEL_MODES:
+            raise RoutingSchemaError(
+                f"travel_time_mode must be one of {list(TRAVEL_MODES)}, "
+                f"got {self.travel_time_mode!r}"
+            )
+        _require_positive_int("RoutingConfig.fixed_travel_minutes", self.fixed_travel_minutes)
+        _require_positive_number(
+            "RoutingConfig.cost_per_truck_day_eur", self.cost_per_truck_day_eur
+        )
+        if (
+            isinstance(self.operating_days_per_week, bool)
+            or not isinstance(self.operating_days_per_week, int)
+            or not 1 <= self.operating_days_per_week <= 7
+        ):
+            raise RoutingSchemaError(
+                "operating_days_per_week must be an int in [1, 7] (calendar bound), "
+                f"got {self.operating_days_per_week!r}"
+            )
+        if (
+            isinstance(self.operating_days_per_year, bool)
+            or not isinstance(self.operating_days_per_year, int)
+            or not 1 <= self.operating_days_per_year <= 366
+        ):
+            raise RoutingSchemaError(
+                "operating_days_per_year must be an int in [1, 366] (calendar bound), "
+                f"got {self.operating_days_per_year!r}"
+            )
+        if isinstance(self.geography_seed, bool) or not isinstance(self.geography_seed, int):
+            raise RoutingSchemaError(
+                f"geography_seed must be an int >= 0, got {type(self.geography_seed).__name__} "
+                f"({self.geography_seed!r})"
+            )
+        if self.geography_seed < 0:
+            raise RoutingSchemaError(f"geography_seed must be >= 0, got {self.geography_seed}")
+        _require_positive_number("RoutingConfig.geography_spread_km", self.geography_spread_km)
 
 
 @dataclass(frozen=True)

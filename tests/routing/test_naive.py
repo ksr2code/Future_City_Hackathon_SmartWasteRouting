@@ -106,6 +106,7 @@ def make_problem(
     volume_capacity_litres: int = 1000,
     weight_capacity_kg: int = 600,
     count_available: int = 2,
+    compartment_volume_litres: dict[MaterialType, int] | None = None,
     disposal_sites: Sequence[DisposalSite] = (DISPOSAL,),
 ) -> RoutingProblem:
     # Fixtures key pairs by short ids ("s1"); the RoutingProblem travel matrix
@@ -126,6 +127,7 @@ def make_problem(
                 volume_capacity_litres=volume_capacity_litres,
                 weight_capacity_kg=weight_capacity_kg,
                 count_available=count_available,
+                compartment_volume_litres=compartment_volume_litres,
             )
         ],
         travel=make_matrix(resolved_ids, resolved_pairs),
@@ -151,14 +153,16 @@ def stop_key(location_id: str, material_type: MaterialType) -> tuple[str, Materi
 
 
 def test_overflow_visits_disposal_first() -> None:
-    # Hand check (vehicle cap 1000 L): s1 loads 600 L; s2 would overflow
-    # (600 + 600 > 1000), so the truck unloads at the disposal in between.
-    # Route: depot ->s1 -> disposal -> s2 -> depot.
+    # Hand check (compartments {brown:700,green:250,white:50}, total 1000 L):
+    # both stops are BROWN 400 L — s1 loads 400 L into the 700 L brown
+    # compartment; s2 would push brown to 800 > 700 (§4.2 v3 per-material
+    # trigger), so the truck unloads at the disposal in between.
+    # Route: depot -> s1 -> disposal -> s2 -> depot.
     # distance_m = 500 + 500 + 500 + 1000 = 2500.
     # duration_min = (10+10 s1) + (10+30 disposal) + (10+10 s2) + 20 return = 100.
     stops = [
-        make_stop("s1", "brown", 100.0),
-        make_stop("s2", "green", 100.0),
+        make_stop("s1", "brown", 100.0, volume_litres=400),
+        make_stop("s2", "brown", 100.0, volume_litres=400),
     ]
     pairs: MatrixPairs = {
         pk("depot", "s1"): (500, 10),
@@ -168,7 +172,12 @@ def test_overflow_visits_disposal_first() -> None:
         pk("depot", "s2"): (1000, 20),
         pk("s1", "s2"): (1000, 20),
     }
-    problem = make_problem(stops, ["depot", "disposal", "s1", "s2"], pairs)
+    problem = make_problem(
+        stops,
+        ["depot", "disposal", "s1", "s2"],
+        pairs,
+        compartment_volume_litres={"brown": 700, "green": 250, "white": 50},
+    )
     solution = naive_fixed_order_simulation(problem)
 
     assert solution.method == "naive_fixed_order"
@@ -181,19 +190,24 @@ def test_overflow_visits_disposal_first() -> None:
         "depot",
         "s1:brown",
         "disposal",
-        "s2:green",
+        "s2:brown",
         "depot",
     ]
     # Load progression after each STOP only; the disposal reset shows in the
-    # second entry being 600 L again, never above the 1000 L capacity.
-    assert route.load_progression == [(600, 300), (600, 300)]
+    # second entry being 400 L again, never above the brown compartment 700 L.
+    assert route.load_progression == [(400, 200), (400, 200)]
     assert route.distance_m == 2500
     assert route.duration_minutes == 100
     assert solution.unserved == []
     assert solution.totals.distance_m == 2500
     assert solution.totals.duration_min == 100
-    assert solution.totals.collected_volume_litres == 1200
-    assert solution.totals.collected_weight_kg == 600
+    assert solution.totals.collected_volume_litres == 800
+    assert solution.totals.collected_volume_by_material == {
+        "brown": 800,
+        "green": 0,
+        "white": 0,
+    }
+    assert solution.totals.collected_weight_kg == 400
     assert solution.totals.stops_served == 2
     assert solution.totals.stops_total == 2
     assert solution.distance_provenance == "haversine_straight_line_derived"
@@ -297,7 +311,7 @@ def test_fleet_exhaustion_leaves_remaining_unserved() -> None:
 def test_zero_fill_stop_still_visited_and_labelled() -> None:
     stops = [
         make_stop("loc-a", "brown", 0.0),
-        make_stop("loc-b", "green", 100.0),
+        make_stop("loc-b", "green", 100.0, volume_litres=300),
     ]
     pairs: MatrixPairs = {
         pk("depot", "loc-a"): (500, 10),
@@ -314,10 +328,16 @@ def test_zero_fill_stop_still_visited_and_labelled() -> None:
     assert len(solution.routes) == 1
     route = solution.routes[0]
     assert sequence_ids(route) == ["depot", "loc-a:brown", "loc-b:green", "depot"]
-    # The zero-fill stop is visited (travel + service) but collects nothing.
-    assert route.load_progression == [(0, 0), (600, 300)]
-    assert solution.totals.collected_volume_litres == 600
-    assert solution.totals.collected_weight_kg == 300
+    # The zero-fill stop is visited (travel + service) but collects nothing;
+    # green 300 L stays within the default equal-third compartment 333 L.
+    assert route.load_progression == [(0, 0), (300, 150)]
+    assert solution.totals.collected_volume_litres == 300
+    assert solution.totals.collected_volume_by_material == {
+        "brown": 0,
+        "green": 300,
+        "white": 0,
+    }
+    assert solution.totals.collected_weight_kg == 150
     assert solution.totals.stops_served == 2
     assert solution.no_forecast_stop_keys == [("loc-a", "brown")]
     assert solution.unserved == []
@@ -374,8 +394,10 @@ def test_served_plus_unserved_reconciles() -> None:
 
 
 def test_load_within_capacity_at_every_step() -> None:
-    # Five stops (collected 600/540/480/420/360 L, cap 1000 L): hand-checked
-    # unloads before s2, s3 and s5; s4 fits on top of s3 (900 L).
+    # Five brown stops (collected 600/540/480/420/360 L) with explicit
+    # compartments {brown:900,green:50,white:50} (total 1000 L): hand-checked
+    # unloads before s2, s3 and s5 (brown would hit 1140/1080/1260 > 900);
+    # s4 fits on top of s3 exactly (900 L).
     fills = [100.0, 90.0, 80.0, 70.0, 60.0]
     stops = [make_stop(f"s{i}", "brown", fill) for i, fill in enumerate(fills, start=1)]
     point_ids = ["depot", "disposal", *(f"s{i}" for i in range(1, 6))]
@@ -386,7 +408,13 @@ def test_load_within_capacity_at_every_step() -> None:
     for i in range(1, 6):
         for j in range(i + 1, 6):
             pairs[pk(f"s{i}", f"s{j}")] = (500, 10)
-    problem = make_problem(stops, point_ids, pairs, count_available=1)
+    problem = make_problem(
+        stops,
+        point_ids,
+        pairs,
+        count_available=1,
+        compartment_volume_litres={"brown": 900, "green": 50, "white": 50},
+    )
     solution = naive_fixed_order_simulation(problem)
 
     assert solution.status == "complete"
@@ -395,6 +423,7 @@ def test_load_within_capacity_at_every_step() -> None:
     progression = solution.routes[0].load_progression
     assert progression == [(600, 300), (540, 270), (480, 240), (900, 450), (360, 180)]
     assert all(volume <= 1000 for volume, _weight in progression)
+    assert all(volume <= 900 for volume, _weight in progression)  # brown compartment
     assert all(weight <= 600 for _volume, weight in progression)
     sequence = sequence_ids(solution.routes[0])
     assert sequence.count("disposal") == 3
@@ -406,9 +435,11 @@ def test_load_within_capacity_at_every_step() -> None:
 
 
 def test_determinism_same_solution_twice() -> None:
+    # Non-vacuous: the overflow fixture (two brown 400 L stops) actually
+    # simulates a route with a disposal unload, then asserts equality.
     stops = [
-        make_stop("s1", "brown", 100.0),
-        make_stop("s2", "green", 100.0),
+        make_stop("s1", "brown", 100.0, volume_litres=400),
+        make_stop("s2", "brown", 100.0, volume_litres=400),
     ]
     pairs: MatrixPairs = {
         pk("depot", "s1"): (500, 10),
@@ -418,10 +449,16 @@ def test_determinism_same_solution_twice() -> None:
         pk("depot", "s2"): (1000, 20),
         pk("s1", "s2"): (1000, 20),
     }
-    problem = make_problem(stops, ["depot", "disposal", "s1", "s2"], pairs)
+    problem = make_problem(
+        stops,
+        ["depot", "disposal", "s1", "s2"],
+        pairs,
+        compartment_volume_litres={"brown": 700, "green": 250, "white": 50},
+    )
     first = naive_fixed_order_simulation(problem)
     second = naive_fixed_order_simulation(problem)
     assert first == second
+    assert first.routes  # the simulated route is real, not an all-unserved tie
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +487,9 @@ def test_volume_oversize_stop_unserved_not_visited() -> None:
 
 
 def test_weight_oversize_stop_unserved() -> None:
-    # 1200 L x 0.5 kg/l = 600 kg > 500 kg weight cap (volume cap 2000 L holds).
+    # 1200 L x 0.5 kg/l = 600 kg > 500 kg weight cap. Explicit compartments
+    # {brown:1500,green:400,white:100} (total 2000 L) keep the BROWN bound
+    # non-binding (1200 <= 1500), so the WEIGHT cap is the deciding reason.
     stops = [make_stop("s1", "brown", 100.0, volume_litres=1200)]
     pairs: MatrixPairs = {
         pk("depot", "s1"): (500, 10),
@@ -463,6 +502,7 @@ def test_weight_oversize_stop_unserved() -> None:
         pairs,
         volume_capacity_litres=2000,
         weight_capacity_kg=500,
+        compartment_volume_litres={"brown": 1500, "green": 400, "white": 100},
     )
     solution = naive_fixed_order_simulation(problem)
 
@@ -512,9 +552,15 @@ def test_return_leg_overrun_reported() -> None:
 
 
 def test_nearest_disposal_tie_broken_by_id() -> None:
+    # ASSUMPTION (fixture rework for §4.2 v3 compartments): both stops are
+    # BROWN 300 L (default compartments 334/333/333). s0 loads 300 L; s1
+    # would push brown to 600 > 334, triggering the per-material disposal
+    # detour with the site-a/site-b tie. Keeping the original mixed
+    # brown/green 600 L stops would make both compartment-oversize even on
+    # an empty vehicle, and the tie-break would never be exercised.
     stops = [
-        make_stop("s0", "brown", 100.0),
-        make_stop("s1", "green", 100.0),
+        make_stop("s0", "brown", 100.0, volume_litres=300),
+        make_stop("s1", "brown", 100.0, volume_litres=300),
     ]
     pairs: MatrixPairs = {
         pk("depot", "s0"): (500, 10),
@@ -541,6 +587,105 @@ def test_nearest_disposal_tie_broken_by_id() -> None:
     sequence = sequence_ids(solution.routes[0])
     assert "site-a" in sequence  # deterministic tie-break by site id
     assert "site-b" not in sequence
+
+
+# ---------------------------------------------------------------------------
+# §4.2 v3 per-material compartment behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_materials_share_one_truck_without_disposal() -> None:
+    """Materials are collected SEPARATED but one truck carries all of them
+    [representative]: brown 300 L + green 300 L each stay within their own
+    equal-third compartment (334/333/333) and the totals, so NO disposal
+    visit is needed — the unload trigger is per material (§4.2 v3), not the
+    mere count of materials."""
+    stops = [
+        make_stop("s1", "brown", 100.0, volume_litres=300),
+        make_stop("s2", "green", 100.0, volume_litres=300),
+    ]
+    pairs: MatrixPairs = {
+        pk("depot", "s1"): (500, 10),
+        pk("depot", "s2"): (500, 10),
+        pk("s1", "s2"): (1000, 20),
+        pk("depot", "disposal"): (750, 15),
+        pk("s1", "disposal"): (500, 10),
+        pk("s2", "disposal"): (500, 10),
+    }
+    problem = make_problem(stops, ["depot", "disposal", "s1", "s2"], pairs)
+    solution = naive_fixed_order_simulation(problem)
+
+    assert solution.status == "complete"
+    assert solution.unserved == []
+    sequence = sequence_ids(solution.routes[0])
+    assert "disposal" not in sequence  # per-material trigger: no unload needed
+    assert solution.routes[0].load_progression == [(300, 150), (600, 300)]
+    # §4.3 v3 per-material visibility in the totals.
+    assert solution.totals.collected_volume_by_material == {
+        "brown": 300,
+        "green": 300,
+        "white": 0,
+    }
+    assert solution.totals.collected_weight_kg == 300
+
+
+def test_same_material_compartment_overflow_triggers_disposal_while_total_fits() -> None:
+    """Contrast to the mixed-material test: brown 300 + brown 300 fits the
+    1,000 L drum and the 600 kg weight cap in TOTAL, but exceeds the 334 L
+    brown compartment — the per-material trigger alone forces the unload."""
+    stops = [
+        make_stop("s1", "brown", 100.0, volume_litres=300),
+        make_stop("s2", "brown", 100.0, volume_litres=300),
+    ]
+    pairs: MatrixPairs = {
+        pk("depot", "s1"): (500, 10),
+        pk("depot", "s2"): (500, 10),
+        pk("s1", "s2"): (1000, 20),
+        pk("depot", "disposal"): (750, 15),
+        pk("s1", "disposal"): (500, 10),
+        pk("s2", "disposal"): (500, 10),
+    }
+    problem = make_problem(
+        stops,
+        ["depot", "disposal", "s1", "s2"],
+        pairs,
+        count_available=1,
+    )
+    solution = naive_fixed_order_simulation(problem)
+
+    assert solution.status == "complete"
+    assert solution.totals.stops_served == 2
+    sequence = sequence_ids(solution.routes[0])
+    assert sequence == ["depot", "s1:brown", "disposal", "s2:brown", "depot"]
+    assert solution.routes[0].load_progression == [(300, 150), (300, 150)]
+    # Weight never binds here (300 kg <= 600 kg) — the compartment decided.
+    assert all(weight <= 600 for _volume, weight in solution.routes[0].load_progression)
+    assert solution.totals.collected_volume_by_material["brown"] == 600
+
+
+def test_compartment_oversize_stop_unserved_with_per_material_reason() -> None:
+    """A stop whose collected volume exceeds its material's COMPARTMENT even
+    on an empty vehicle is unserved — even though the total drum (1000 L)
+    would hold it (600 L <= 1000 L); the reason names the compartment and
+    the material, keeping the word "volume" (§4.4: surfaced, never hidden)."""
+    stops = [make_stop("s1", "green", 100.0, volume_litres=600)]
+    pairs: MatrixPairs = {
+        pk("depot", "s1"): (500, 10),
+        pk("depot", "disposal"): (800, 16),
+        pk("s1", "disposal"): (900, 18),
+    }
+    problem = make_problem(stops, ["depot", "disposal", "s1"], pairs)
+    solution = naive_fixed_order_simulation(problem)
+
+    assert solution.status == "incomplete"
+    assert solution.routes == []
+    assert solution.totals.stops_served == 0
+    assert solution.totals.stops_served + len(solution.unserved) == 1
+    assert solution.unserved[0].stop_key == ("s1", "green")
+    reason = solution.unserved[0].reason
+    assert "collected volume 600 L exceeds" in reason
+    assert "compartment" in reason
+    assert "green" in reason
 
 
 # ---------------------------------------------------------------------------

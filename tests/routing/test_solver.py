@@ -18,7 +18,7 @@ from itertools import pairwise
 import pytest
 from ortools.constraint_solver import routing_enums_pb2
 
-from src.data.schema import MaterialType
+from src.data.schema import MATERIALS, MaterialType
 from src.routing.demo_config import (
     DEMO_DISPOSAL_SERVICE_MINUTES,
     DEMO_STOP_SERVICE_MINUTES,
@@ -117,13 +117,27 @@ def make_vehicle(
     volume_capacity_litres: int = 2_000,
     weight_capacity_kg: int = 1_500,
     count_available: int = 2,
+    compartment_volume_litres: dict[MaterialType, int] | None = None,
 ) -> VehicleType:
+    """§4.2 v3: explicit compartment layout, or the 1/4-1/2-1/4 test split
+    [demo assumption] — green gets HALF the drum so a full 1,000 L green
+    container (the fixture stop) fits exactly one compartment on the
+    default 2,000 L truck. Integer split; sums exactly to the capacity."""
+    if compartment_volume_litres is None:
+        quarter = volume_capacity_litres // 4
+        half = volume_capacity_litres // 2
+        compartment_volume_litres = {
+            "brown": quarter,
+            "green": half,
+            "white": volume_capacity_litres - quarter - half,
+        }
     return VehicleType(
         id=vehicle_id,
         name="Test Truck",
         volume_capacity_litres=volume_capacity_litres,
         weight_capacity_kg=weight_capacity_kg,
         count_available=count_available,
+        compartment_volume_litres=dict(compartment_volume_litres),
     )
 
 
@@ -207,32 +221,46 @@ def assert_solution_invariants(solution: RoutingSolution, fixture: Fixture) -> N
 
     # 2. Volume and weight capacities hold at every load-progression point;
     #    progression has one entry per collection stop; depot ends the route.
+    #    §4.2 v3: per-material load stays within the route vehicle's
+    #    COMPARTMENT capacity for that material; a disposal visit resets
+    #    every material dimension (§4.4).
     collected_volume = 0
     collected_weight = 0
     for route in solution.routes:
         vehicle = next(v for v in problem.vehicle_types if v.id == route.vehicle_type_id)
+        compartments = vehicle.compartment_capacities()
         assert isinstance(route.sequence[0], Depot)
         assert isinstance(route.sequence[-1], Depot)
         stops_in_sequence = [node for node in route.sequence if isinstance(node, Stop)]
         assert len(route.load_progression) == len(stops_in_sequence)
         running_volume = 0
         running_weight = 0
+        running_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
         progression_index = 0
         for node in route.sequence:
             if isinstance(node, DisposalSite):
                 running_volume = 0  # unload resets the load (§4.3)
                 running_weight = 0
+                running_by_material = {material: 0 for material in MATERIALS}
             elif isinstance(node, Stop):
                 running_volume += node.collected_volume_litres
                 running_weight += node.collected_weight_kg(
                     problem.config.densities_kg_per_litre[node.material_type]
                 )
+                running_by_material[node.material_type] += node.collected_volume_litres
                 volume, weight = route.load_progression[progression_index]
                 assert (volume, weight) == (running_volume, running_weight), (
                     f"load progression mismatch at entry {progression_index}"
                 )
                 assert volume <= vehicle.volume_capacity_litres, "volume capacity exceeded"
                 assert weight <= vehicle.weight_capacity_kg, "weight capacity exceeded"
+                assert (
+                    running_by_material[node.material_type] <= compartments[node.material_type]
+                ), (
+                    f"compartment capacity exceeded for {node.material_type} "
+                    f"({running_by_material[node.material_type]} L > "
+                    f"{compartments[node.material_type]} L)"
+                )
                 progression_index += 1
         collected_volume += sum(node.collected_volume_litres for node in stops_in_sequence)
         collected_weight += sum(
@@ -244,12 +272,34 @@ def assert_solution_invariants(solution: RoutingSolution, fixture: Fixture) -> N
     for route in solution.routes:
         assert route.duration_minutes <= problem.config.max_shift_minutes
 
-    # 4. Totals reconcile with per-route sums.
+    # 4. Totals reconcile with per-route sums; §4.3 v3 per-material split.
+    collected_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
+    for route in solution.routes:
+        for node in route.sequence:
+            if isinstance(node, Stop):
+                collected_by_material[node.material_type] += node.collected_volume_litres
     assert solution.totals.distance_m == sum(route.distance_m for route in solution.routes)
     assert solution.totals.duration_min == sum(route.duration_minutes for route in solution.routes)
     assert solution.totals.collected_volume_litres == collected_volume
+    assert solution.totals.collected_volume_by_material == collected_by_material
+    assert sum(solution.totals.collected_volume_by_material.values()) == (
+        solution.totals.collected_volume_litres
+    )
     assert solution.totals.collected_weight_kg == collected_weight
     assert solution.objective_value == solution.totals.distance_m
+
+    # 4b. §4.3 v3 cost block and travel_time_mode echo — pure derivations
+    # from RoutingConfig parameters, [predicted], never invoiced amounts.
+    rate = problem.config.cost_per_truck_day_eur
+    days = problem.config.operating_days_per_year
+    cost = solution.cost
+    assert cost.vehicles_used == len(solution.routes)
+    assert cost.cost_eur_per_day == cost.vehicles_used * rate
+    assert cost.cost_eur_per_year == cost.cost_eur_per_day * days
+    assert cost.fleet_cost.trucks == solution.fleet_recommendation.count
+    assert cost.fleet_cost.cost_eur_per_day == cost.fleet_cost.trucks * rate
+    assert cost.fleet_cost.cost_eur_per_year == cost.fleet_cost.cost_eur_per_day * days
+    assert solution.travel_time_mode == problem.config.travel_time_mode
 
     # 5. Fleet recommendation echoes the §4.4 math over full demand.
     volumes = sum(stop.collected_volume_litres for stop in problem.stops)
@@ -361,7 +411,10 @@ def test_shift_violation_is_surfaced_as_unserved_not_hidden() -> None:
 
 
 def test_capacity_infeasible_stop_dropped_with_reason() -> None:
-    # 2000 L collected vs the largest vehicle volume capacity 1000 L.
+    # Truck 2,000 L (green compartment 1,000 L on the 1/4-1/2-1/4 split):
+    # the 1,000 L container fits its material's compartment exactly; the
+    # 2,000 L container exceeds ANY green compartment -> dropped with a
+    # per-material volume reason (§4.2 v3; never silently hidden).
     big_stop = make_stop("loc-1")
     huge_stop = Stop(
         location_id="loc-9",
@@ -374,7 +427,7 @@ def test_capacity_infeasible_stop_dropped_with_reason() -> None:
     )
     fixture = make_fixture(
         stops=[big_stop, huge_stop],
-        vehicles=[make_vehicle(volume_capacity_litres=1_000, weight_capacity_kg=10_000)],
+        vehicles=[make_vehicle(volume_capacity_litres=2_000, weight_capacity_kg=10_000)],
     )
     solution = solve(fixture.problem)
     assert solution.totals.stops_served == 1
@@ -426,12 +479,20 @@ def test_unserved_reason_reports_true_fleet_size_not_expanded() -> None:
     multi_type = make_fixture(
         stops=[make_stop("loc-1")],
         vehicles=[
-            make_vehicle(vehicle_id="small", count_available=1),
+            make_vehicle(
+                vehicle_id="small",
+                volume_capacity_litres=1_200,
+                weight_capacity_kg=1_100,
+                count_available=1,
+                # Explicit layout: green fits a 1,000 L container exactly.
+                compartment_volume_litres={"green": 1_000, "brown": 100, "white": 100},
+            ),
             make_vehicle(
                 vehicle_id="large",
                 volume_capacity_litres=3_000,
                 weight_capacity_kg=2_500,
                 count_available=2,
+                compartment_volume_litres={"green": 1_000, "brown": 1_000, "white": 1_000},
             ),
         ],
     )
@@ -537,6 +598,97 @@ def test_multiple_vehicle_types_capacities_and_recommendation() -> None:
     # Full demand 3000 L / 3000 kg: small -> 3, large -> 1 => min is large.
     assert solution.fleet_recommendation.vehicle_type_id == "zz_large"
     assert solution.fleet_recommendation.count == 1
+
+
+# ---------------------------------------------------------------------------
+# §4.2 v3 compartments and §4.3 v3 cost block
+# ---------------------------------------------------------------------------
+
+
+def test_compartment_overflow_forces_disposal_even_when_weight_fits() -> None:
+    # One truck 2,000 L / 5,000 kg (green compartment 1,000 L on the
+    # 1/4-1/2-1/4 split): two full 1,000 L green containers fit the drum
+    # AND the weight cap in total, but each material compartment takes only
+    # one container — a disposal unload must sit between the two stops
+    # (§4.4: materials never mix; a disposal resets every material dimension).
+    fixture = make_fixture(
+        stops=[make_stop("loc-1"), make_stop("loc-2")],
+        vehicles=[
+            make_vehicle(
+                vehicle_id="truck",
+                volume_capacity_litres=2_000,
+                weight_capacity_kg=5_000,
+                count_available=1,
+            )
+        ],
+    )
+    solution = solve(fixture.problem)
+    assert solution.status in {"optimal", "feasible"}
+    assert solution.totals.stops_served == 2
+    # Compartment visibility (§4.3 v3): both green containers collected.
+    assert solution.totals.collected_volume_by_material["green"] == 2_000
+    assert solution.totals.collected_volume_by_material["brown"] == 0
+    assert solution.totals.collected_volume_by_material["white"] == 0
+    # The serving route must contain a disposal visit between green stops —
+    # the green compartment cannot hold both without the reset.
+    route = next(route for route in solution.routes if len(route.sequence) > 2)
+    green_positions = [i for i, node in enumerate(route.sequence) if isinstance(node, Stop)]
+    disposal_positions = [
+        i for i, node in enumerate(route.sequence) if isinstance(node, DisposalSite)
+    ]
+    assert disposal_positions, "compartment overflow must force a disposal visit"
+    assert min(green_positions) < disposal_positions[0] < max(green_positions)
+    assert_solution_invariants(solution, fixture)
+
+
+def test_cost_block_derives_from_explicit_config_parameters() -> None:
+    """§4.3 v3 formulas over NON-default config values (250 EUR/day,
+    100 days/year): day = vehicles_used x 250; year = day x 100; fleet cost
+    from fleet_recommendation.count — labelled [predicted] derivations."""
+    config = RoutingConfig(
+        max_shift_minutes=480,
+        densities_kg_per_litre={"brown": 1.0, "green": 1.0, "white": 1.0},
+        detour_factor=1.4,
+        avg_speed_kmh=30.0,
+        cost_per_truck_day_eur=250.0,
+        operating_days_per_year=100,
+    )
+    fixture = make_fixture(
+        stops=[make_stop("loc-1"), make_stop("loc-2")],
+        vehicles=[make_vehicle(volume_capacity_litres=10_000, weight_capacity_kg=10_000)],
+        config=config,
+    )
+    solution = solve(fixture.problem)
+    assert solution.cost.vehicles_used == len(solution.routes)
+    assert solution.cost.cost_eur_per_day == solution.cost.vehicles_used * 250.0
+    assert solution.cost.cost_eur_per_year == solution.cost.cost_eur_per_day * 100
+    assert solution.cost.fleet_cost.trucks == solution.fleet_recommendation.count
+    assert solution.cost.fleet_cost.cost_eur_per_day == (solution.cost.fleet_cost.trucks * 250.0)
+    assert solution.cost.fleet_cost.cost_eur_per_year == (
+        solution.cost.fleet_cost.cost_eur_per_day * 100
+    )
+    assert_solution_invariants(solution, fixture)
+
+
+def test_travel_time_mode_is_echoed_from_config() -> None:
+    """§4.3 v3: the effective travel_time_mode is echoed on the solution;
+    with an explicit fixture matrix the mode changes durations accounting
+    nowhere — it is a pure echo here (matrix derivation lives in geography)."""
+    config = RoutingConfig(
+        max_shift_minutes=480,
+        densities_kg_per_litre={"brown": 1.0, "green": 1.0, "white": 1.0},
+        detour_factor=1.4,
+        avg_speed_kmh=30.0,
+        travel_time_mode="haversine_derived",
+    )
+    fixture = make_fixture(
+        stops=[make_stop("loc-1")],
+        vehicles=[make_vehicle(volume_capacity_litres=10_000, weight_capacity_kg=10_000)],
+        config=config,
+    )
+    solution = solve(fixture.problem)
+    assert solution.travel_time_mode == "haversine_derived"
+    assert_solution_invariants(solution, fixture)
 
 
 # ---------------------------------------------------------------------------

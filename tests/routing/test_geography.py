@@ -140,6 +140,58 @@ def test_synthetic_coordinates_spread_within_demo_radius() -> None:
         assert 1_000.0 <= distance_m <= 6_000.0
 
 
+def test_seed_zero_reproduces_legacy_coordinates_exactly() -> None:
+    """§4.6 v3 regression pins: seed 0 (the default) must reproduce the
+    pre-v3 SHA-256 layout EXACTLY — these two literal coordinates pin the
+    legacy layout against accidental drift."""
+    coordinates = synthetic_stop_coordinates(
+        [
+            ("00000000-0000-0000-0000-000000000001", "brown"),
+            ("loc-regression-a", "green"),
+        ],
+        DEPOT,
+    )
+    assert coordinates[("00000000-0000-0000-0000-000000000001", "brown")] == (
+        49.19827117159227,
+        9.24552928516631,
+    )
+    assert coordinates[("loc-regression-a", "green")] == (
+        49.1949456018753,
+        9.175013585196771,
+    )
+
+
+def test_nonzero_seed_is_deterministic_and_differs_from_legacy_layout() -> None:
+    """A seed > 0 gives a different but equally deterministic layout
+    [demo assumption sensitivity knob, user decision (1)]."""
+    keys = [("loc-a", "brown"), ("loc-b", "green")]
+    legacy = synthetic_stop_coordinates(keys, DEPOT, seed=0)
+    alt_first = synthetic_stop_coordinates(keys, DEPOT, seed=7)
+    alt_second = synthetic_stop_coordinates(keys, DEPOT, seed=7)
+    assert alt_first == alt_second  # deterministic
+    assert alt_first != legacy  # a genuinely different layout
+
+
+def test_spread_km_3_narrows_the_outer_radius_band() -> None:
+    """geography_spread_km maps to the outer radius: spread 3.0 keeps every
+    stop inside the 1-3 km band around the depot."""
+    keys = [(f"loc-{i}", "brown") for i in range(12)]
+    coordinates = synthetic_stop_coordinates(keys, DEPOT, max_radius_km=3.0)
+    for lat, lon in coordinates.values():
+        distance_m = haversine_distance_m(DEPOT.lat, DEPOT.lon, lat, lon)
+        assert 1_000.0 <= distance_m <= 3_000.0
+
+
+def test_inverted_radius_band_raises() -> None:
+    """max_radius_km <= min_radius_km is invalid input — never silently
+    swapped (contract §4.2 validation discipline)."""
+    keys = [("loc-a", "brown")]
+    with pytest.raises(RoutingSchemaError):
+        synthetic_stop_coordinates(keys, DEPOT, max_radius_km=1.0)
+    with pytest.raises(RoutingSchemaError):
+        synthetic_stop_coordinates(keys, DEPOT, min_radius_km=6.0, max_radius_km=6.0)
+
+
 # ---------------------------------------------------------------------------
 # build_travel_matrix
 # ---------------------------------------------------------------------------
@@ -167,15 +219,43 @@ def test_matrix_distances_apply_detour_factor_and_are_ints() -> None:
     assert isinstance(matrix.distance_m[i][j], int)
 
 
-def test_matrix_durations_derive_from_speed() -> None:
-    """duration_min = round(distance_m / (speed_kmh * 1000 / 60)) — at 30 km/h
-    that is 500 m per minute."""
+def test_matrix_durations_fixed_per_leg_default_ten_minutes_every_leg() -> None:
+    """§4.2 v3 default ``fixed_per_leg`` [representative]: EVERY off-diagonal
+    leg — incl. depot/disposal legs — carries fixed_travel_minutes (10);
+    the diagonal stays 0 (a self-leg does not exist). Distances are
+    unchanged in both modes."""
     stop = make_stops([("loc-a", "brown")])[0]
     matrix = build_travel_matrix(DEPOT, [DISPOSAL], [stop], CONFIG)
+    assert CONFIG.travel_time_mode == "fixed_per_leg"
+    n = len(matrix.point_ids)
+    for i in range(n):
+        assert matrix.duration_min[i][i] == 0
+        for j in range(n):
+            if i != j:
+                assert matrix.duration_min[i][j] == CONFIG.fixed_travel_minutes == 10
+
+
+def test_matrix_durations_haversine_derived_mode_keeps_speed_rule() -> None:
+    """``haversine_derived`` [demo assumption]: duration_min =
+    round(distance_m / (speed_kmh * 1000 / 60)) — at 30 km/h that is
+    500 m per minute; requires the explicit mode (default is fixed_per_leg)."""
+    config = demo_routing_config()
+    config = RoutingConfig(
+        max_shift_minutes=config.max_shift_minutes,
+        densities_kg_per_litre=config.densities_kg_per_litre,
+        detour_factor=config.detour_factor,
+        avg_speed_kmh=config.avg_speed_kmh,
+        travel_time_mode="haversine_derived",
+    )
+    stop = make_stops([("loc-a", "brown")])[0]
+    matrix = build_travel_matrix(DEPOT, [DISPOSAL], [stop], config)
     i = matrix.point_ids.index("demo_depot")
     j = matrix.point_ids.index(stop_point_id(stop))
-    expected = round(matrix.distance_m[i][j] / (CONFIG.avg_speed_kmh * 1000.0 / 60.0))
+    expected = round(matrix.distance_m[i][j] / (config.avg_speed_kmh * 1000.0 / 60.0))
     assert matrix.duration_min[i][j] == expected
+    # Distances are identical in both modes — never renamed.
+    default_matrix = build_travel_matrix(DEPOT, [DISPOSAL], [stop], CONFIG)
+    assert matrix.distance_m == default_matrix.distance_m
 
 
 def test_matrix_is_symmetric_with_zero_diagonal() -> None:
@@ -253,28 +333,28 @@ def test_problem_from_candidates_builds_stops_with_demo_defaults() -> None:
 
 def test_collected_volume_is_fill_pct_times_container_volume() -> None:
     """collected_volume_litres = round(container_volume_litres * pct / 100):
-    1900 L at 90 % = 1710 L exactly."""
+    3,000 L (§4.6 v3 [representative]) at 90 % = 2,700 L exactly."""
     candidates = [make_candidate("loc-a", "brown", 90.0)]
     problem = _problem(candidates)
     stop = problem.stops[0]
-    assert stop.collected_volume_litres == 1710
+    assert stop.collected_volume_litres == 2700
 
 
 def test_collected_weight_is_volume_times_density() -> None:
-    """weight_kg = round(collected_volume_litres * density): 1710 L x
-    0.5 kg/L = 855 kg with the uniform demo density."""
+    """weight_kg = round(collected_volume_litres * density): 2,700 L x
+    0.5 kg/L = 1,350 kg with the uniform demo density."""
     candidates = [make_candidate("loc-a", "brown", 90.0)]
     problem = _problem(candidates)
     stop = problem.stops[0]
-    assert stop.collected_weight_kg(CONFIG.densities_kg_per_litre["brown"]) == 855
+    assert stop.collected_weight_kg(CONFIG.densities_kg_per_litre["brown"]) == 1350
 
 
 def test_full_container_collects_full_volume_and_half_weight() -> None:
     candidates = [make_candidate("loc-a", "white", 100.0)]
     problem = _problem(candidates)
     stop = problem.stops[0]
-    assert stop.collected_volume_litres == 1900
-    assert stop.collected_weight_kg(0.5) == 950
+    assert stop.collected_volume_litres == 3000  # §4.6 v3 [representative]
+    assert stop.collected_weight_kg(0.5) == 1500
 
 
 def test_rounding_is_nearest_with_bankers_ties() -> None:

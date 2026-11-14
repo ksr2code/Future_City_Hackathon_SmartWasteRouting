@@ -255,6 +255,81 @@ def test_vehicle_count_must_be_true_int(bad_count: object) -> None:
 
 
 # ---------------------------------------------------------------------------
+# VehicleType compartments (contract §4.2 v3)
+# ---------------------------------------------------------------------------
+
+
+def test_vehicle_compartments_none_resolves_equal_thirds() -> None:
+    """``compartment_volume_litres=None`` (layout unknown [demo assumption])
+    resolves to capacity // 3 with the remainder litres on the first
+    materials in observed MATERIALS order: 1,000 L -> 334/333/333 (§4.2)."""
+    vehicle = VehicleType(
+        id="t",
+        name="n",
+        volume_capacity_litres=1000,
+        weight_capacity_kg=800,
+        count_available=1,
+    )
+    assert vehicle.compartment_volume_litres is None
+    assert vehicle.compartment_capacities() == {"brown": 334, "green": 333, "white": 333}
+
+
+def test_vehicle_explicit_compartments_echo_validated_layout() -> None:
+    """Explicit layouts must sum exactly to volume_capacity_litres; 1,000 L
+    split as 700/250/50 echoes itself via compartment_capacities()."""
+    vehicle = VehicleType(
+        id="t",
+        name="n",
+        volume_capacity_litres=1000,
+        weight_capacity_kg=800,
+        count_available=1,
+        compartment_volume_litres={"brown": 700, "green": 250, "white": 50},
+    )
+    assert vehicle.compartment_capacities() == {"brown": 700, "green": 250, "white": 50}
+
+
+def test_vehicle_compartments_sum_must_equal_volume_capacity() -> None:
+    """§4.2 v3: sum(compartments) != volume_capacity_litres is invalid input —
+    the solver relies on compartments covering the whole drum exactly."""
+    with pytest.raises(RoutingSchemaError, match="must sum to volume_capacity_litres"):
+        VehicleType(
+            id="t",
+            name="n",
+            volume_capacity_litres=1000,
+            weight_capacity_kg=800,
+            count_available=1,
+            compartment_volume_litres={"brown": 700, "green": 250, "white": 49},
+        )
+
+
+@pytest.mark.parametrize("bad_litres", [0, -250])
+def test_vehicle_compartment_volumes_must_be_positive(bad_litres: int) -> None:
+    with pytest.raises(RoutingSchemaError):
+        VehicleType(
+            id="t",
+            name="n",
+            volume_capacity_litres=1000,
+            weight_capacity_kg=800,
+            count_available=1,
+            compartment_volume_litres={"brown": bad_litres, "green": 750, "white": 250},
+        )
+
+
+def test_vehicle_compartments_must_cover_exactly_observed_materials() -> None:
+    """Missing or extra materials are invalid — the three observed materials
+    are the only ones that exist (contract §1.1/§4.2)."""
+    with pytest.raises(RoutingSchemaError):
+        VehicleType(
+            id="t",
+            name="n",
+            volume_capacity_litres=1000,
+            weight_capacity_kg=800,
+            count_available=1,
+            compartment_volume_litres={"brown": 500, "green": 500},  # white missing
+        )
+
+
+# ---------------------------------------------------------------------------
 # RoutingConfig validation
 # ---------------------------------------------------------------------------
 
@@ -326,6 +401,107 @@ def test_config_solver_time_limit_must_be_positive(bad_limit: float) -> None:
             detour_factor=1.4,
             avg_speed_kmh=30.0,
             solver_time_limit_s=bad_limit,
+        )
+
+
+# ---------------------------------------------------------------------------
+# RoutingConfig v3 travel/cost/geography validation (contract §4.2/§4.6)
+# ---------------------------------------------------------------------------
+
+
+def test_config_travel_mode_defaults_to_fixed_per_leg() -> None:
+    """§4.6 v3 [representative]: fixed_per_leg default with 10 fixed minutes."""
+    config = RoutingConfig(
+        max_shift_minutes=480,
+        densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+        detour_factor=1.4,
+        avg_speed_kmh=30.0,
+    )
+    assert config.travel_time_mode == "fixed_per_leg"
+    assert config.fixed_travel_minutes == 10
+
+
+def test_config_unknown_travel_mode_raises() -> None:
+    with pytest.raises(RoutingSchemaError, match="travel_time_mode"):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            travel_time_mode="road_speed",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("bad_minutes", [0, -10])
+def test_config_fixed_travel_minutes_must_be_positive(bad_minutes: int) -> None:
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            fixed_travel_minutes=bad_minutes,
+        )
+
+
+@pytest.mark.parametrize("bad_cost", [0.0, -500.0])
+def test_config_cost_per_truck_day_must_be_positive(bad_cost: float) -> None:
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            cost_per_truck_day_eur=bad_cost,
+        )
+
+
+@pytest.mark.parametrize("bad_days", [0, 8, True, 2.5])
+def test_config_operating_days_per_week_must_be_int_1_to_7(bad_days: object) -> None:
+    """Calendar bounds [1, 7] are physical facts, not invented thresholds."""
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            operating_days_per_week=bad_days,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("bad_days", [0, 367, "200"])
+def test_config_operating_days_per_year_must_be_int_1_to_366(bad_days: object) -> None:
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            operating_days_per_year=bad_days,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("bad_seed", [-1, 0.5, True])
+def test_config_geography_seed_must_be_non_negative_int(bad_seed: object) -> None:
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            geography_seed=bad_seed,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("bad_spread", [0.0, -6.0])
+def test_config_geography_spread_km_must_be_positive(bad_spread: float) -> None:
+    with pytest.raises(RoutingSchemaError):
+        RoutingConfig(
+            max_shift_minutes=480,
+            densities_kg_per_litre={"brown": 0.5, "green": 0.5, "white": 0.5},
+            detour_factor=1.4,
+            avg_speed_kmh=30.0,
+            geography_spread_km=bad_spread,
         )
 
 

@@ -1,8 +1,12 @@
 """OR-Tools route optimisation (M9) — docs/contracts.md §4.3/§4.4.
 
-Single-depot CVRP with volume AND weight capacity dimensions and disposal
-sites as optional unload nodes that reset the load. There is deliberately NO
-Time dimension in the OR-Tools model: a span cap on any optional node that
+Single-depot CVRP with per-material volume capacity dimensions (one OR-Tools
+dimension per observed material, capacities = the vehicle's compartment
+volumes §4.2 v3) plus a total weight dimension, and disposal sites as
+optional unload nodes that reset EVERY dimension (materials are never mixed
+on one truck [representative]; a disposal visit unloads everything). There
+is deliberately NO Time dimension in the OR-Tools model: a span cap on any
+optional node that
 cannot fit makes the whole model FAIL at root propagation (OR-Tools
 limitation, empirically verified; slack and service-on-arrival variants do
 not help). Shift compliance (``max_shift_minutes``) is therefore enforced in
@@ -25,8 +29,16 @@ Model notes (all [protocol choice v1], documented for the model card):
 - Load cumul semantics: the transit callback adds a stop's pickup on the arc
   LEAVING it, so ``cumul(node)`` is the load on the incoming arc; capacity is
   enforced on every arc. An arc leaving a disposal site transits
-  ``-max_capacity``, which resets the following cumul to its 0 lower bound
-  ("unload everything").
+  ``-max_capacity`` on each material dimension AND the weight dimension,
+  which resets the following cumul to its 0 lower bound ("unload
+  everything" — §4.4: a disposal visit resets every material dimension).
+- Compartments: each material dimension is capped by the route vehicle's
+  compartment capacity for that material (§4.2: ``None`` ⇒ equal thirds).
+  Total volume needs no extra dimension: validated compartment layouts sum
+  exactly to ``volume_capacity_litres``, so per-material bounds imply the
+  total. Output ``load_progression`` stays the §4.3/§5.2.1 wire shape
+  ``(volume_litres, weight_kg)``; per-material visibility comes from
+  ``totals.collected_volume_by_material``.
 - A vehicle may finish at the depot with load aboard (the yard absorbs it);
   nothing in the brief forbids this [demo assumption].
 - Stops are optional nodes with a drop penalty larger than any possible route
@@ -45,6 +57,10 @@ Model notes (all [protocol choice v1], documented for the model card):
   than the budget while the measured elapsed time shows the safety cap fired
   → "timeout" (§4.7: never silently presented as deterministic).
 
+Cost figures (§4.3 v3) are pure derivations from ``vehicles_used`` (routes
+emitted) / ``fleet_recommendation.count`` x ``RoutingConfig`` cost
+parameters — labelled [predicted], never invoiced amounts (§4.4).
+
 Distance provenance is echoed from the travel matrix untouched —
 straight-line-derived matrices are never called road distance (§4.2).
 """
@@ -52,20 +68,24 @@ straight-line-derived matrices are never called road distance (§4.2).
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, NamedTuple, TypeAlias
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2  # type: ignore[import-untyped]
 
+from src.data.schema import MATERIALS, MaterialType
 from src.forecasting.features import SeriesKey
 from src.routing.fleet import FleetRecommendation, recommend_fleet_for_problem
 from src.routing.schemas import (
     Depot,
     DisposalSite,
     Provenance,
+    RoutingConfig,
     RoutingProblem,
     Stop,
+    TravelTimeMode,
     VehicleType,
     stop_point_id,
 )
@@ -75,6 +95,8 @@ __all__ = [
     "Route",
     "RoutingSolution",
     "RoutingSolverError",
+    "SolutionCost",
+    "SolutionFleetCost",
     "SolutionStatus",
     "SolutionTotals",
     "UnservedStop",
@@ -128,19 +150,47 @@ class UnservedStop(NamedTuple):
 
 @dataclass(frozen=True)
 class SolutionTotals:
-    """Solution-wide totals — contract §4.3 ``totals``."""
+    """Solution-wide totals — contract §4.3 (``collected_volume_by_material``
+    added v3: per-material litres for compartment visibility, §4.4)."""
 
     distance_m: int  # metres [predicted]
     duration_min: int  # minutes [predicted]
     collected_volume_litres: int  # litres [predicted]
+    collected_volume_by_material: dict[MaterialType, int]  # litres per material [predicted]
     collected_weight_kg: int  # kilograms [predicted]
     stops_served: int
     stops_total: int
 
 
 @dataclass(frozen=True)
+class SolutionFleetCost:
+    """Cost of the §4.3 fleet recommendation — contract §4.3 ``cost.fleet_cost``
+    (``trucks`` = ``fleet_recommendation.count``). All figures [predicted]
+    derived, never invoiced amounts (§4.4)."""
+
+    trucks: int
+    cost_eur_per_day: float
+    cost_eur_per_year: float
+
+
+@dataclass(frozen=True)
+class SolutionCost:
+    """Cost block — contract §4.3 v3 formulas: ``cost_eur_per_day =
+    vehicles_used x cost_per_truck_day_eur``; ``cost_eur_per_year =
+    cost_eur_per_day x operating_days_per_year`` [predicted] derived
+    (decision ③)."""
+
+    vehicles_used: int
+    cost_eur_per_day: float
+    cost_eur_per_year: float
+    fleet_cost: SolutionFleetCost
+
+
+@dataclass(frozen=True)
 class Route:
-    """One vehicle route — contract §4.3 ``Route``."""
+    """One vehicle route — contract §4.3 ``Route`` (``load_progression``
+    stays the §5.2.1 wire shape ``(volume_litres, weight_kg)``; per-material
+    visibility comes from ``SolutionTotals.collected_volume_by_material``)."""
 
     vehicle_type_id: str
     sequence: list[Depot | DisposalSite | Stop]  # depot start ... depot end
@@ -151,7 +201,8 @@ class Route:
 
 @dataclass(frozen=True)
 class RoutingSolution:
-    """Complete solver output — contract §4.3."""
+    """Complete solver output — contract §4.3 (v3: ``travel_time_mode`` echo
+    + derived ``cost`` block)."""
 
     status: SolutionStatus
     objective_value: int | None  # metres; None iff no solution (infeasible/timeout)
@@ -159,6 +210,8 @@ class RoutingSolution:
     unserved: list[UnservedStop]
     totals: SolutionTotals
     fleet_recommendation: FleetRecommendation
+    travel_time_mode: TravelTimeMode  # echoed effective mode (§4.2 v3)
+    cost: SolutionCost
     distance_provenance: Provenance  # echoed from TravelMatrix (§4.2)
 
 
@@ -250,20 +303,12 @@ def _build_model(
     distance_idx = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(distance_idx)
 
-    max_volume = max(vehicle_type.volume_capacity_litres for vehicle_type in vehicles)
     max_weight = max(vehicle_type.weight_capacity_kg for vehicle_type in vehicles)
     demand_by_node = {
         node: _stop_collected_quantities(stop, problem)
         for node, stop in layout.stops_by_node.items()
     }
-
-    def volume_callback(from_index: int, to_index: int) -> int:
-        if from_index == to_index:
-            return 0  # self-loop of an inactive node (see duration_callback)
-        node = node_of(from_index)
-        if node in layout.disposal_by_node:
-            return -max_volume  # unload everything; cumul >= 0 clamps the rest
-        return demand_by_node.get(node, (0, 0))[0]
+    compartments_by_vehicle = [vehicle_type.compartment_capacities() for vehicle_type in vehicles]
 
     def weight_callback(from_index: int, to_index: int) -> int:
         if from_index == to_index:
@@ -273,16 +318,8 @@ def _build_model(
             return -max_weight
         return demand_by_node.get(node, (0, 0))[1]
 
-    volume_idx = routing.RegisterTransitCallback(volume_callback)
     weight_idx = routing.RegisterTransitCallback(weight_callback)
     # slack_max = max capacity so the negative unload transit can reach 0.
-    routing.AddDimensionWithVehicleCapacity(
-        volume_idx,
-        max_volume,
-        [vehicle_type.volume_capacity_litres for vehicle_type in vehicles],
-        True,
-        "Volume",
-    )
     routing.AddDimensionWithVehicleCapacity(
         weight_idx,
         max_weight,
@@ -290,6 +327,41 @@ def _build_model(
         True,
         "Weight",
     )
+
+    # One volume dimension per observed material (§4.2 v3 compartments):
+    # each stop loads only its own material; disposal transits
+    # -max_compartment so the unload resets every material dimension; the
+    # per-vehicle capacities are the compartment volumes. Total volume needs
+    # no dimension — validated compartments sum to volume_capacity_litres.
+    def make_volume_callback(
+        material: MaterialType,
+    ) -> Callable[[int, int], int]:
+        max_compartment = max(compartments[material] for compartments in compartments_by_vehicle)
+
+        def volume_callback(from_index: int, to_index: int) -> int:
+            if from_index == to_index:
+                return 0  # self-loop of an inactive node
+            node = node_of(from_index)
+            if node in layout.disposal_by_node:
+                return -max_compartment  # unload resets this material too
+            stop_quantities = demand_by_node.get(node)
+            if stop_quantities is None:
+                return 0
+            stop = layout.stops_by_node[node]
+            return stop_quantities[0] if stop.material_type == material else 0
+
+        return volume_callback
+
+    for material in MATERIALS:
+        max_compartment = max(compartments[material] for compartments in compartments_by_vehicle)
+        volume_idx = routing.RegisterTransitCallback(make_volume_callback(material))
+        routing.AddDimensionWithVehicleCapacity(
+            volume_idx,
+            max_compartment,
+            [compartments[material] for compartments in compartments_by_vehicle],
+            True,
+            f"Volume_{material}",
+        )
     # NOTE: no Time dimension in the model. An OR-Tools span cap makes the
     # whole model ROUTING_FAIL at root propagation whenever any optional node
     # (stop or disposal) cannot fit within the cap — empirically verified
@@ -447,27 +519,35 @@ def _extract_routes(
             total_duration += duration_min[i][j] + layout.service_by_node[node_i]
 
         progression: list[tuple[int, int]] = []
-        volume = 0
+        volume_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
         weight = 0
         for node in sequence_nodes:
             if node in layout.stops_by_node:
-                stop_volume, stop_weight = _stop_collected_quantities(
-                    layout.stops_by_node[node], problem
-                )
-                volume += stop_volume
+                stop = layout.stops_by_node[node]
+                stop_volume, stop_weight = _stop_collected_quantities(stop, problem)
+                volume_by_material[stop.material_type] += stop_volume
                 weight += stop_weight
-                progression.append((volume, weight))
+                progression.append((sum(volume_by_material.values()), weight))
             elif node in layout.disposal_by_node:
-                volume = 0
+                volume_by_material = {material: 0 for material in MATERIALS}
                 weight = 0
 
         vehicle_type = vehicle_types[vehicle]
-        for load_volume, load_weight in progression:
-            if load_volume > vehicle_type.volume_capacity_litres:
+        compartments = vehicle_type.compartment_capacities()
+        for material, load_volume in volume_by_material.items():
+            if load_volume > compartments[material]:
                 raise RoutingSolverError(
-                    f"internal consistency: volume {load_volume} L exceeds vehicle "
-                    f"capacity {vehicle_type.volume_capacity_litres} L on a solved route"
+                    f"internal consistency: {material} volume {load_volume} L exceeds "
+                    f"vehicle compartment capacity {compartments[material]} L on a "
+                    "solved route"
                 )
+        total_volume = sum(volume_by_material.values())
+        if total_volume > vehicle_type.volume_capacity_litres:
+            raise RoutingSolverError(
+                f"internal consistency: volume {total_volume} L exceeds vehicle "
+                f"capacity {vehicle_type.volume_capacity_litres} L on a solved route"
+            )
+        for _load_volume, load_weight in progression:
             if load_weight > vehicle_type.weight_capacity_kg:
                 raise RoutingSolverError(
                     f"internal consistency: weight {load_weight} kg exceeds vehicle "
@@ -546,9 +626,12 @@ def _prefilter_shift_infeasible(
 
 def _route_metrics(
     sequence: list[Depot | DisposalSite | Stop], problem: RoutingProblem
-) -> tuple[int, int, list[tuple[int, int]]]:
-    """(distance_m, duration_minutes, load_progression) recomputed from the
-    travel matrix and config for an object-level route sequence."""
+) -> tuple[int, int, list[tuple[int, int]], list[dict[MaterialType, int]]]:
+    """(distance_m, duration_minutes, load_progression,
+    material_load_progression) recomputed from the travel matrix and config
+    for an object-level route sequence. ``material_load_progression`` is
+    aligned with ``load_progression``: per-material litres aboard after each
+    stop (§4.2 v3 compartments)."""
     matrix = problem.travel
     index = {point_id: i for i, point_id in enumerate(matrix.point_ids)}
 
@@ -566,19 +649,25 @@ def _route_metrics(
         distance += matrix.distance_m[i][j]
         service = 0 if isinstance(node_a, Depot) else node_a.service_minutes
         duration += matrix.duration_min[i][j] + service
+
+    def fresh_materials() -> dict[MaterialType, int]:
+        return {material: 0 for material in MATERIALS}
+
     progression: list[tuple[int, int]] = []
-    volume = 0
+    material_progression: list[dict[MaterialType, int]] = []
+    volume_by_material = fresh_materials()
     weight = 0
     for node in sequence:
         if isinstance(node, Stop):
             stop_volume, stop_weight = _stop_collected_quantities(node, problem)
-            volume += stop_volume
+            volume_by_material[node.material_type] += stop_volume
             weight += stop_weight
-            progression.append((volume, weight))
+            progression.append((sum(volume_by_material.values()), weight))
+            material_progression.append(dict(volume_by_material))
         elif isinstance(node, DisposalSite):
-            volume = 0
+            volume_by_material = fresh_materials()
             weight = 0
-    return distance, duration, progression
+    return distance, duration, progression, material_progression
 
 
 def _apply_shift_limits(
@@ -588,15 +677,17 @@ def _apply_shift_limits(
     ``max_shift_minutes``: first drop disposal visits (they are optional in
     the model; a vehicle may end at the depot loaded [demo assumption]) as
     long as the remaining load progression stays within the route vehicle's
-    volume/weight capacities; then remove the lowest-priority stop (smallest
-    predicted_fill_pct, ties by (location_id, material_type)). Each step
-    shrinks the sequence, so the loop terminates; removed stops surface as
-    unserved with a ``shift_limit_exceeded`` reason (never hidden)."""
+    compartment capacities (per material, §4.2 v3), its volume and its
+    weight; then remove the lowest-priority stop (smallest predicted_fill_pct,
+    ties by (location_id, material_type)). Each step shrinks the sequence, so
+    the loop terminates; removed stops surface as unserved with a
+    ``shift_limit_exceeded`` reason (never hidden)."""
     shifted_routes: list[Route] = []
     removed_unserved: list[UnservedStop] = []
     for route in routes:
         sequence: list[Depot | DisposalSite | Stop] = list(route.sequence)
         vehicle_type = next(vt for vt in problem.vehicle_types if vt.id == route.vehicle_type_id)
+        compartments = vehicle_type.compartment_capacities()
         stops_in_route = [node for node in sequence if isinstance(node, Stop)]
         removal_order = sorted(
             stops_in_route,
@@ -608,7 +699,27 @@ def _apply_shift_limits(
         )
         drop_candidates = iter(removal_order)
         removed: list[Stop] = []
-        distance, duration, progression = _route_metrics(sequence, problem)
+        distance, duration, progression, _material_progression = _route_metrics(sequence, problem)
+
+        def within_caps(
+            c_progression: list[tuple[int, int]],
+            c_material_progression: list[dict[MaterialType, int]],
+            c_compartments: dict[MaterialType, int] = compartments,
+            c_vehicle_type: VehicleType = vehicle_type,
+        ) -> bool:
+            """Compartments (per material, §4.2 v3), total volume and weight
+            all hold at every load-progression point of the candidate. The
+            route's own vehicle layout is bound via defaults (B023: loop
+            variables are not captured late)."""
+            return (
+                all(
+                    all(load <= c_compartments[material] for material, load in entry.items())
+                    for entry in c_material_progression
+                )
+                and all(v <= c_vehicle_type.volume_capacity_litres for v, _w in c_progression)
+                and all(w <= c_vehicle_type.weight_capacity_kg for _v, w in c_progression)
+            )
+
         while duration > problem.config.max_shift_minutes:
             # 1) disposal visit removable? keeps >= 1 stop, caps respected.
             disposal_positions = [
@@ -617,10 +728,10 @@ def _apply_shift_limits(
             if disposal_positions and any(isinstance(node, Stop) for node in sequence):
                 position = disposal_positions[-1]  # deterministic: last visit
                 candidate = [node for i, node in enumerate(sequence) if i != position]
-                c_distance, c_duration, c_progression = _route_metrics(candidate, problem)
-                if all(v <= vehicle_type.volume_capacity_litres for v, _w in c_progression) and all(
-                    w <= vehicle_type.weight_capacity_kg for _v, w in c_progression
-                ):
+                c_distance, c_duration, c_progression, c_material_progression = _route_metrics(
+                    candidate, problem
+                )
+                if within_caps(c_progression, c_material_progression):
                     sequence, distance, duration, progression = (
                         candidate,
                         c_distance,
@@ -642,7 +753,9 @@ def _apply_shift_limits(
                 )
             ]
             removed.append(drop)
-            distance, duration, progression = _route_metrics(sequence, problem)
+            distance, duration, progression, _material_progression = _route_metrics(
+                sequence, problem
+            )
         if removed:
             for stop in sorted(removed, key=lambda stop: (stop.location_id, stop.material_type)):
                 removed_unserved.append(
@@ -675,14 +788,21 @@ def _unserved_reason(stop: Stop, problem: RoutingProblem) -> str:
     Fleet size/capacity figures come from the UNexpanded problem.vehicle_types
     (one entry per type). Summing over the per-vehicle expanded list would
     multiply count_available by itself (one type x 3 vehicles -> "9 vehicles").
+    Volume feasibility is per material (§4.2 v3): a stop can only load its own
+    material, so the binding bound is the largest COMPARTMENT for that
+    material across types (validated compartments sum to each type's volume
+    capacity, so the compartment bound dominates).
     """
     volume, weight = _stop_collected_quantities(stop, problem)
-    max_volume = max(vehicle_type.volume_capacity_litres for vehicle_type in problem.vehicle_types)
+    max_compartment = max(
+        vehicle_type.compartment_capacities()[stop.material_type]
+        for vehicle_type in problem.vehicle_types
+    )
     max_weight = max(vehicle_type.weight_capacity_kg for vehicle_type in problem.vehicle_types)
-    if volume > max_volume:
+    if volume > max_compartment:
         return (
-            f"collected volume {volume} L exceeds the largest vehicle volume "
-            f"capacity {max_volume} L"
+            f"collected volume {volume} L of {stop.material_type} exceeds the largest "
+            f"compartment capacity {max_compartment} L for that material"
         )
     if weight > max_weight:
         return (
@@ -716,14 +836,40 @@ def _global_unserved(status: SolutionStatus, problem: RoutingProblem) -> list[Un
     ]
 
 
+def _zero_volumes_by_material() -> dict[MaterialType, int]:
+    return {material: 0 for material in MATERIALS}
+
+
 def _empty_totals(problem: RoutingProblem) -> SolutionTotals:
     return SolutionTotals(
         distance_m=0,
         duration_min=0,
         collected_volume_litres=0,
+        collected_volume_by_material=_zero_volumes_by_material(),
         collected_weight_kg=0,
         stops_served=0,
         stops_total=len(problem.stops),
+    )
+
+
+def _cost_block(
+    vehicles_used: int,
+    fleet_count: int,
+    config: RoutingConfig,
+) -> SolutionCost:
+    """§4.3 v3 cost formulas — pure derivations from ``RoutingConfig``
+    parameters, labelled [predicted], never invoiced amounts (§4.4)."""
+    cost_eur_per_day = vehicles_used * config.cost_per_truck_day_eur
+    fleet_cost_eur_per_day = fleet_count * config.cost_per_truck_day_eur
+    return SolutionCost(
+        vehicles_used=vehicles_used,
+        cost_eur_per_day=cost_eur_per_day,
+        cost_eur_per_year=cost_eur_per_day * config.operating_days_per_year,
+        fleet_cost=SolutionFleetCost(
+            trucks=fleet_count,
+            cost_eur_per_day=fleet_cost_eur_per_day,
+            cost_eur_per_year=fleet_cost_eur_per_day * config.operating_days_per_year,
+        ),
     )
 
 
@@ -741,10 +887,17 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
     the module docstring for the honest determinism claim). Every input stop
     is served in exactly one route or reported in ``unserved`` with a reason
     (§4.4). The fleet recommendation (§4.4) always covers the full demand,
-    including unserved stops.
+    including unserved stops. ``travel_time_mode`` and the derived ``cost``
+    block echo config (§4.3 v3).
     """
     fleet_recommendation_result = recommend_fleet_for_problem(problem)
     provenance: Provenance = problem.travel.provenance
+    travel_time_mode: TravelTimeMode = problem.config.travel_time_mode
+    empty_cost = _cost_block(
+        vehicles_used=0,
+        fleet_count=fleet_recommendation_result.count,
+        config=problem.config,
+    )
 
     if not problem.stops:
         return RoutingSolution(
@@ -754,6 +907,8 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
             unserved=[],
             totals=_empty_totals(problem),
             fleet_recommendation=fleet_recommendation_result,
+            travel_time_mode=travel_time_mode,
+            cost=empty_cost,
             distance_provenance=provenance,
         )
 
@@ -775,6 +930,8 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
             unserved=_global_unserved(status, problem),
             totals=_empty_totals(problem),
             fleet_recommendation=fleet_recommendation_result,
+            travel_time_mode=travel_time_mode,
+            cost=empty_cost,
             distance_provenance=provenance,
         )
 
@@ -806,12 +963,16 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
     )
 
     served_stops = [node for route in routes for node in route.sequence if isinstance(node, Stop)]
+    volume_by_material = _zero_volumes_by_material()
+    for stop in served_stops:
+        volume_by_material[stop.material_type] += _stop_collected_quantities(stop, problem)[0]
     totals = SolutionTotals(
         distance_m=sum(route.distance_m for route in routes),
         duration_min=sum(route.duration_minutes for route in routes),
         collected_volume_litres=sum(
             _stop_collected_quantities(stop, problem)[0] for stop in served_stops
         ),
+        collected_volume_by_material=volume_by_material,
         collected_weight_kg=sum(
             _stop_collected_quantities(stop, problem)[1] for stop in served_stops
         ),
@@ -826,5 +987,11 @@ def solve(problem: RoutingProblem) -> RoutingSolution:
         unserved=unserved,
         totals=totals,
         fleet_recommendation=fleet_recommendation_result,
+        travel_time_mode=travel_time_mode,
+        cost=_cost_block(
+            vehicles_used=len(routes),
+            fleet_count=fleet_recommendation_result.count,
+            config=problem.config,
+        ),
         distance_provenance=provenance,
     )

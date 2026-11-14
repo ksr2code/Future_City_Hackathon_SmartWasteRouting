@@ -11,7 +11,10 @@ Distances are haversine (great-circle, metres) times the configured detour
 factor — an *approximation of road distance*, never a road measurement.
 Provenance is therefore pinned to ``"haversine_straight_line_derived"`` and
 must stay visible in all downstream outputs (AGENTS rule 9). Durations
-derive from distance and the configured average speed (§4.1 units).
+follow ``RoutingConfig.travel_time_mode`` (§4.2 v3): ``fixed_per_leg`` puts
+``fixed_travel_minutes`` on EVERY leg incl. depot/disposal legs;
+``haversine_derived`` derives minutes from distance and the configured
+average speed. Distances are identical in both modes.
 
 Deterministic: identical inputs (and config) ⇒ identical matrices and
 problems; point order is depot first, then disposal sites sorted by id, then
@@ -30,6 +33,7 @@ from src.forecasting.features import SeriesKey
 from src.routing.demo_config import DEMO_STOP_SERVICE_MINUTES
 from src.routing.schemas import (
     PROVENANCE_HAVERSINE,
+    TRAVEL_MODE_FIXED_PER_LEG,
     Depot,
     DisposalSite,
     RoutingConfig,
@@ -55,7 +59,9 @@ EARTH_RADIUS_M = 6_371_000.0
 
 # Demo spread of synthetic stops around the depot, in kilometres —
 # [demo assumption] (§4.6 gives no geography; this only needs to look like a
-# plausible urban collection area).
+# plausible urban collection area). ``RoutingConfig.geography_spread_km``
+# overrides the outer radius; the 1 km inner radius keeps the band
+# "1..spread" - with the §4.6 default 6.0 km the band is the current 1-6 km.
 DEMO_MIN_RADIUS_KM = 1.0
 DEMO_MAX_RADIUS_KM = 6.0
 
@@ -81,13 +87,24 @@ def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> 
     return EARTH_RADIUS_M * central_angle
 
 
-def _stable_fractions(location_id: str, material_type: MaterialType) -> tuple[float, float]:
+def _stable_fractions(
+    location_id: str, material_type: MaterialType, seed: int = 0
+) -> tuple[float, float]:
     """Two fractions in [0, 1) hashed from the series key via SHA-256.
 
     Stable across processes and runs (unlike ``hash()``, which is salted per
     interpreter) — this is what makes the synthetic geography deterministic.
+    ``seed == 0`` hashes the legacy ``"<location_id>|<material>"`` string and
+    therefore reproduces the pre-v3 coordinates EXACTLY (§4.6 v3 default,
+    regression-tested); any ``seed > 0`` hashes ``"<seed>|<location_id>|
+    <material>"`` — a different, still fully deterministic layout [demo
+    assumption sensitivity knob, user decision ①].
     """
-    digest = hashlib.sha256(f"{location_id}|{material_type}".encode()).digest()
+    if seed == 0:
+        digest_input = f"{location_id}|{material_type}"
+    else:
+        digest_input = f"{seed}|{location_id}|{material_type}"
+    digest = hashlib.sha256(digest_input.encode()).digest()
     angle_seed = int.from_bytes(digest[:8], "big")
     radius_seed = int.from_bytes(digest[8:16], "big")
     scale = float(2**64)
@@ -99,19 +116,33 @@ def synthetic_stop_coordinates(
     depot: Depot,
     min_radius_km: float = DEMO_MIN_RADIUS_KM,
     max_radius_km: float = DEMO_MAX_RADIUS_KM,
+    seed: int = 0,
 ) -> dict[SeriesKey, tuple[float, float]]:
     """Deterministic synthetic WGS84 coordinates for series keys —
     **[demo assumption]**, spread ``min_radius_km``..``max_radius_km`` around
     ``depot`` (defaults are demo values; the depot itself is synthetic).
 
+    ``seed`` and the outer radius map to ``RoutingConfig.geography_seed`` /
+    ``geography_spread_km`` (§4.6 v3 knobs, user decision ①): the defaults
+    (``seed=0``, ``max_radius_km=6.0``) reproduce the historical coordinates
+    exactly; other values give deterministic alternative layouts for
+    sensitivity analysis only.
+
     Same key ⇒ same coordinate on every run; no two inputs share state. The
     polar→degree conversion uses standard degree lengths at the depot's
-    latitude (adequate for demo distances).
+    latitude (adequate for demo distances). ``max_radius_km`` must exceed
+    ``min_radius_km`` — an inverted band is invalid input, never silently
+    swapped.
     """
+    if max_radius_km <= min_radius_km:
+        raise RoutingSchemaError(
+            f"max_radius_km (geography_spread_km) must be > min_radius_km "
+            f"({min_radius_km} km), got {max_radius_km}"
+        )
     km_per_degree_lon = KM_PER_DEGREE_LON_EQUATOR * math.cos(math.radians(depot.lat))
     coordinates: dict[SeriesKey, tuple[float, float]] = {}
     for location_id, material_type in keys:
-        angle_fraction, radius_fraction = _stable_fractions(location_id, material_type)
+        angle_fraction, radius_fraction = _stable_fractions(location_id, material_type, seed)
         angle_rad = 2.0 * math.pi * angle_fraction
         radius_km = min_radius_km + (max_radius_km - min_radius_km) * radius_fraction
         lat = depot.lat + (radius_km * math.cos(angle_rad)) / KM_PER_DEGREE_LAT
@@ -141,13 +172,18 @@ def build_travel_matrix(
     stops: Sequence[Stop],
     config: RoutingConfig,
 ) -> TravelMatrix:
-    """Derive the distance/duration matrices (§4.2) from coordinates.
+    """Derive the distance/duration matrices (§4.2, v3 modes) from coordinates.
 
     ``distance_m = round(haversine_m x config.detour_factor)`` (nearest
-    metre, ties-to-even) — straight-line-derived, provenance stays
-    ``"haversine_straight_line_derived"``. ``duration_min =
-    round(distance_m / (avg_speed_kmh x 1000 / 60))`` (nearest minute).
-    Symmetric by construction; zero diagonal.
+    metre, ties-to-even) in BOTH modes — straight-line-derived, provenance
+    stays ``"haversine_straight_line_derived"``.
+
+    ``duration_min`` per ``config.travel_time_mode`` (§4.2 v3):
+    ``fixed_per_leg`` ⇒ ``config.fixed_travel_minutes`` on EVERY leg incl.
+    depot/disposal legs (diagonal stays 0 — a self-leg does not exist);
+    ``haversine_derived`` ⇒ ``round(distance_m / (avg_speed_kmh x 1000 /
+    60))`` (nearest minute), the pre-v3 derivation. Symmetric by
+    construction; zero diagonal.
     """
     points = _ordered_points(depot, disposal_sites, stops)
     point_ids = [point_id for point_id, _lat, _lon in points]
@@ -161,7 +197,10 @@ def build_travel_matrix(
             _id_j, lat_j, lon_j = points[j]
             straight_m = haversine_distance_m(lat_i, lon_i, lat_j, lon_j)
             road_approx_m = round(straight_m * config.detour_factor)
-            minutes = round(road_approx_m / metres_per_minute)
+            if config.travel_time_mode == TRAVEL_MODE_FIXED_PER_LEG:
+                minutes = config.fixed_travel_minutes
+            else:
+                minutes = round(road_approx_m / metres_per_minute)
             distance_m[i][j] = road_approx_m
             distance_m[j][i] = road_approx_m
             duration_min[i][j] = minutes

@@ -1,12 +1,14 @@
-"""Demo defaults for routing inputs — docs/contracts.md §4.6 (user decision
-2026-11-14) plus synthetic Heilbronn depot/disposal fixtures (§4.5).
+"""Demo defaults for routing inputs — docs/contracts.md §4.6 v3 (2026-11-14)
+plus synthetic Heilbronn depot/disposal fixtures (§4.5).
 
-**Every value below is a [demo assumption]**: the challenge brief (§3,
-audited 2026-11-14) names the variable *categories* only — no numeric values
-— and the data contains no coordinates, capacities, volumes, densities or
-service times [observed]. Values here are request-overridable at M10/M11
-(§4.6: overrides never relabel facts); host-supplied values replace defaults
-in config only — never silently.
+Source labels per §4.6 v3: values the challenge representative supplied
+verbally on 14 Nov 2026 are **[representative]** (trusted defaults, absent
+from brief and data, always echoed with their source); everything else is a
+**[demo assumption]** — the challenge brief (§3, audited 2026-11-14) names
+the variable *categories* only, and the data contains no coordinates,
+capacities, volumes, densities or service times [observed]. All values are
+request-overridable at M10/M11 (§4.6: overrides never relabel facts);
+host-supplied values replace defaults in config only — never silently.
 
 Coordinates are synthetic demo fixtures near Heilbronn (~49.15 N, 9.22 E),
 labelled via ``demo_``-prefixed ids so real and simulated locations can never
@@ -16,11 +18,19 @@ be confused (M4 rule).
 from __future__ import annotations
 
 from src.data.schema import MATERIALS, MaterialType
-from src.routing.schemas import Depot, DisposalSite, RoutingConfig, VehicleType
+from src.routing.schemas import (
+    TRAVEL_MODE_FIXED_PER_LEG,
+    Depot,
+    DisposalSite,
+    RoutingConfig,
+    TravelTimeMode,
+    VehicleType,
+)
 
 __all__ = [
     "DEMO_AVG_SPEED_KMH",
     "DEMO_CONTAINER_VOLUME_LITRES",
+    "DEMO_COST_PER_TRUCK_DAY_EUR",
     "DEMO_DENSITIES_KG_PER_LITRE",
     "DEMO_DEPOT_ID",
     "DEMO_DEPOT_LAT",
@@ -32,10 +42,16 @@ __all__ = [
     "DEMO_DISPOSAL_LON",
     "DEMO_DISPOSAL_NAME",
     "DEMO_DISPOSAL_SERVICE_MINUTES",
+    "DEMO_FIXED_TRAVEL_MINUTES",
+    "DEMO_GEOGRAPHY_SEED",
+    "DEMO_GEOGRAPHY_SPREAD_KM",
     "DEMO_MAX_SHIFT_MINUTES",
+    "DEMO_OPERATING_DAYS_PER_WEEK",
+    "DEMO_OPERATING_DAYS_PER_YEAR",
     "DEMO_SOLVER_SOLUTION_LIMIT",
     "DEMO_SOLVER_TIME_LIMIT_S",
     "DEMO_STOP_SERVICE_MINUTES",
+    "DEMO_TRAVEL_TIME_MODE",
     "DEMO_VEHICLE_COUNT_AVAILABLE",
     "DEMO_VEHICLE_ID",
     "DEMO_VEHICLE_NAME",
@@ -47,9 +63,9 @@ __all__ = [
     "demo_vehicle_type",
 ]
 
-# --- §4.6 user-agreed defaults — each [demo assumption] --------------------
+# --- §4.6 v3 defaults — each labelled [representative] or [demo assumption] --
 
-DEMO_CONTAINER_VOLUME_LITRES = 1900  # litres; typical glass igloo size [demo assumption]
+DEMO_CONTAINER_VOLUME_LITRES = 3000  # litres; 3 m³ per container [representative]
 
 DEMO_DENSITIES_KG_PER_LITRE: dict[MaterialType, float] = {
     # conservative loose-cullet demo value, uniform across materials §4.6 [demo assumption]
@@ -63,13 +79,32 @@ DEMO_VEHICLE_NAME = "Demo Collection Truck"  # [demo assumption]
 DEMO_VEHICLE_VOLUME_CAPACITY_LITRES = 12_000  # litres [demo assumption]
 DEMO_VEHICLE_WEIGHT_CAPACITY_KG = 10_000  # kilograms [demo assumption]
 DEMO_VEHICLE_COUNT_AVAILABLE = 3  # vehicles available [demo assumption]
+# Compartment layout stays None ⇒ equal thirds (4,000 L per material)
+# [demo assumption — layout unknown, §4.6 v3].
 
-DEMO_STOP_SERVICE_MINUTES = 10  # minutes per stop §4.6 [demo assumption]
+DEMO_STOP_SERVICE_MINUTES = 5  # minutes per container [representative; per
+# location? open question — docs/open_questions.md]
 DEMO_DISPOSAL_SERVICE_MINUTES = 30  # minutes per disposal unload §4.6 [demo assumption]
-DEMO_MAX_SHIFT_MINUTES = 480  # minutes; 8 h demo cap §4.6 [demo assumption]
+DEMO_MAX_SHIFT_MINUTES = 480  # minutes; 8 h shift [representative]
 
-DEMO_AVG_SPEED_KMH = 30.0  # km/h; urban demo speed §4.6 [demo assumption]
-DEMO_DETOUR_FACTOR = 1.4  # haversine → approx road factor §4.6 [demo assumption]
+DEMO_TRAVEL_TIME_MODE: TravelTimeMode = TRAVEL_MODE_FIXED_PER_LEG  # [representative
+# reading of "10 min between containers"]
+DEMO_FIXED_TRAVEL_MINUTES = 10  # minutes on EVERY leg incl. depot/disposal
+# [representative] + [interpretation — open question]
+DEMO_AVG_SPEED_KMH = 30.0  # km/h; urban demo speed §4.6 [demo assumption];
+# used ONLY in haversine_derived mode
+DEMO_DETOUR_FACTOR = 1.4  # haversine → approx road factor §4.6 [demo assumption];
+# provenance stays "straight-line derived"
+
+DEMO_COST_PER_TRUCK_DAY_EUR = 500.0  # euros per truck-day [representative]
+DEMO_OPERATING_DAYS_PER_WEEK = 5  # days/week [representative] (echo/display)
+DEMO_OPERATING_DAYS_PER_YEAR = 200  # days/year [representative] (echo/display)
+
+# Geography sensitivity knobs (§4.6 v3, user decision ①): parameterise the
+# SYNTHETIC layout only — defaults reproduce the current coordinates exactly
+# (regression-tested). [demo assumption knobs]
+DEMO_GEOGRAPHY_SEED = 0  # 0 = current SHA-256 layout
+DEMO_GEOGRAPHY_SPREAD_KM = 6.0  # km; outer radius of the current 1-6 km band
 
 # --- §4.6 v2 solver defaults (user-approved 2026-11-14) ---------------------
 
@@ -116,7 +151,11 @@ def demo_disposal_site() -> DisposalSite:
 
 
 def demo_vehicle_type() -> VehicleType:
-    """The single §4.6 demo vehicle type (fresh instance per call)."""
+    """The single §4.6 demo vehicle type (fresh instance per call).
+
+    ``compartment_volume_litres`` stays ``None`` ⇒ equal thirds
+    (12,000 / 3 = 4,000 L per material) [demo assumption — layout unknown,
+    §4.6 v3]."""
     return VehicleType(
         id=DEMO_VEHICLE_ID,
         name=DEMO_VEHICLE_NAME,
@@ -127,7 +166,7 @@ def demo_vehicle_type() -> VehicleType:
 
 
 def demo_routing_config() -> RoutingConfig:
-    """All §4.6 defaults in one validated :class:`RoutingConfig`.
+    """All §4.6 v3 defaults in one validated :class:`RoutingConfig`.
 
     Fresh instances per call (the densities dict is mutable; callers must
     never share state across requests).
@@ -141,4 +180,11 @@ def demo_routing_config() -> RoutingConfig:
         avg_speed_kmh=DEMO_AVG_SPEED_KMH,
         solver_solution_limit=DEMO_SOLVER_SOLUTION_LIMIT,
         solver_time_limit_s=DEMO_SOLVER_TIME_LIMIT_S,
+        travel_time_mode=DEMO_TRAVEL_TIME_MODE,
+        fixed_travel_minutes=DEMO_FIXED_TRAVEL_MINUTES,
+        cost_per_truck_day_eur=DEMO_COST_PER_TRUCK_DAY_EUR,
+        operating_days_per_week=DEMO_OPERATING_DAYS_PER_WEEK,
+        operating_days_per_year=DEMO_OPERATING_DAYS_PER_YEAR,
+        geography_seed=DEMO_GEOGRAPHY_SEED,
+        geography_spread_km=DEMO_GEOGRAPHY_SPREAD_KM,
     )

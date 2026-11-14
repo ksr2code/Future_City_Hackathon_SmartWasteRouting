@@ -22,10 +22,14 @@ Simulation rules (user-defined, deterministic):
   litres, then ``round(x density)`` kilograms — the same :class:`Stop` derived
   quantities the optimiser loads (densities from ``RoutingConfig``, never
   hardcoded).
-- Before a stop that would exceed the vehicle's volume or weight capacity, the
-  vehicle first visits the disposal site nearest to its current position (by
-  travel minutes, ties by site id), unloads (disposal ``service_minutes``) and
-  its load resets to zero.
+- Compartments (§4.2 v3): materials are collected separated, so the binding
+  volume bound per vehicle is the material's COMPARTMENT capacity (``None``
+  layout ⇒ equal thirds). A stop whose collected volume exceeds its
+  material's compartment even on an empty vehicle is unserved; before a stop
+  that would overflow its material's compartment (or the total volume/weight
+  capacity), the vehicle first visits the disposal site nearest to its
+  current position (by travel minutes, ties by site id), unloads (disposal
+  ``service_minutes``) and EVERY material dimension resets to zero.
 - When the next leg + service would exceed ``max_shift_minutes``, the vehicle
   returns to the depot and the **next** vehicle continues with that same stop.
 - Vehicles exhausted with stops remaining ⇒ those stops are ``unserved`` with
@@ -61,6 +65,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
+from src.data.schema import MATERIALS, MaterialType
 from src.forecasting.features import SeriesKey
 from src.routing.fleet import FleetRecommendation, recommend_fleet_for_problem
 from src.routing.schemas import (
@@ -163,10 +168,12 @@ def _expanded_fleet(problem: RoutingProblem) -> list[VehicleType]:
 def _oversize_reason(
     stop: Stop, vehicle_type: VehicleType, volume_litres: int, weight_kg: int
 ) -> str:
-    if volume_litres > vehicle_type.volume_capacity_litres:
+    compartment = vehicle_type.compartment_capacities()[stop.material_type]
+    if volume_litres > compartment:
         return (
-            f"collected volume {volume_litres} L exceeds the {vehicle_type.id} volume "
-            f"capacity {vehicle_type.volume_capacity_litres} L even when the vehicle is empty"
+            f"collected volume {volume_litres} L exceeds the {vehicle_type.id} compartment "
+            f"capacity {compartment} L for material {stop.material_type} even when the "
+            "vehicle is empty"
         )
     return (
         f"collected weight {weight_kg} kg exceeds the {vehicle_type.id} weight capacity "
@@ -227,21 +234,20 @@ def _simulate_order(
         )
 
     fleet = _expanded_fleet(problem)
-
-    routes: list[NaiveRoute] = []
-    unserved: list[UnservedStop] = []
-    shift_violations: list[str] = []
-
     # Current vehicle state (fresh start on vehicle 0 at the depot).
     vehicle_index = 0
     vehicle_type = fleet[0]
     pos_pid = depot.id
     sequence: list[Depot | DisposalSite | Stop] = [depot]
-    volume = 0  # litres aboard
+    # §4.2 v3: load is tracked PER MATERIAL (collected separated [representative]).
+    volume_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
     weight = 0  # kilograms aboard
     elapsed = 0  # minutes since depot departure (travel + arrival services)
     route_distance = 0
     progression: list[tuple[int, int]] = []
+    # §4.2 v3: per-material compartment capacities of the CURRENT vehicle —
+    # recomputed on each vehicle hand-over (types may differ per vehicle).
+    compartments = vehicle_type.compartment_capacities()
 
     def return_to_depot_and_emit() -> None:
         """Close the current vehicle's route: travel home, emit the route,
@@ -269,17 +275,25 @@ def _simulate_order(
         )
 
     def reset_vehicle_state() -> None:
-        nonlocal vehicle_index, vehicle_type, sequence, volume, weight, elapsed
-        nonlocal route_distance, progression
+        """Start the next vehicle at the depot with an empty load — including
+        a fresh per-material dict and the next vehicle's compartment layout
+        (§4.2 v3; types may differ per vehicle)."""
+        nonlocal vehicle_index, vehicle_type, sequence, volume_by_material, weight, elapsed
+        nonlocal route_distance, progression, compartments
         vehicle_index += 1
         if vehicle_index < len(fleet):
             vehicle_type = fleet[vehicle_index]
         sequence = [depot]
-        volume = 0
+        volume_by_material = {material: 0 for material in MATERIALS}
         weight = 0
         elapsed = 0
         route_distance = 0
         progression = []
+        compartments = vehicle_type.compartment_capacities()
+
+    routes: list[NaiveRoute] = []
+    unserved: list[UnservedStop] = []
+    shift_violations: list[str] = []
 
     stop_cursor = 0
     while stop_cursor < len(ordered_stops):
@@ -300,8 +314,10 @@ def _simulate_order(
         collected_weight = stop.collected_weight_kg(densities[stop.material_type])
 
         # 1) A stop that cannot fit even an empty vehicle is never servable.
+        # §4.2 v3: the binding volume bound is the stop material's COMPARTMENT
+        # capacity (materials collected separated); weight stays a total bound.
         if (
-            collected_volume > vehicle_type.volume_capacity_litres
+            collected_volume > compartments[stop.material_type]
             or collected_weight > vehicle_type.weight_capacity_kg
         ):
             unserved.append(
@@ -315,9 +331,14 @@ def _simulate_order(
 
         # 2) Capacity full enough to need an unload first: detour via the
         # nearest disposal site (travel + its unload service) — only possible
-        # with load aboard; an empty vehicle passed check 1.
+        # with load aboard; an empty vehicle passed check 1. §4.2 v3: the
+        # trigger is per material (the stop's compartment would overflow);
+        # total volume and weight stay fallback bounds (§4.4 invariants).
         needs_disposal = (
-            volume + collected_volume > vehicle_type.volume_capacity_litres
+            volume_by_material[stop.material_type] + collected_volume
+            > compartments[stop.material_type]
+            or sum(volume_by_material.values()) + collected_volume
+            > vehicle_type.volume_capacity_litres
             or weight + collected_weight > vehicle_type.weight_capacity_kg
         )
         if needs_disposal:
@@ -355,15 +376,15 @@ def _simulate_order(
             route_distance += dist(pos_pid, disposal.id)
             elapsed += minutes(pos_pid, disposal.id) + disposal.service_minutes
             sequence.append(disposal)
-            volume = 0
+            volume_by_material = {material: 0 for material in MATERIALS}
             weight = 0
             pos_pid = disposal.id
         route_distance += dist(pos_pid, stop_pid)
         elapsed += minutes(pos_pid, stop_pid) + stop.service_minutes
         sequence.append(stop)
-        volume += collected_volume
+        volume_by_material[stop.material_type] += collected_volume
         weight += collected_weight
-        progression.append((volume, weight))
+        progression.append((sum(volume_by_material.values()), weight))
         pos_pid = stop_pid
         stop_cursor += 1
 
@@ -371,10 +392,14 @@ def _simulate_order(
         return_to_depot_and_emit()
 
     served_stops = [node for route in routes for node in route.sequence if isinstance(node, Stop)]
+    served_volume_by_material: dict[MaterialType, int] = {material: 0 for material in MATERIALS}
+    for stop in served_stops:
+        served_volume_by_material[stop.material_type] += stop.collected_volume_litres
     totals = SolutionTotals(
         distance_m=sum(route.distance_m for route in routes),
         duration_min=sum(route.duration_minutes for route in routes),
         collected_volume_litres=sum(stop.collected_volume_litres for stop in served_stops),
+        collected_volume_by_material=served_volume_by_material,
         collected_weight_kg=sum(
             stop.collected_weight_kg(densities[stop.material_type]) for stop in served_stops
         ),
