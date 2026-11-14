@@ -19,8 +19,10 @@ import statistics
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Literal, TypeVar
 
 from src.api import hosted, schemas
 from src.api.errors import DemoDatasetMissingError
@@ -46,13 +48,16 @@ from src.forecasting.baseline import (
     ForecastRecord,
     forecast,
 )
+from src.forecasting.days_to_full import build_days_to_full
 from src.forecasting.features import SeriesKey, build_feature_row, group_by_series
 from src.forecasting.targets import EvaluationCase
 from src.routing.demo_config import (
     DEMO_CONTAINER_VOLUME_LITRES,
+    DEMO_COST_PER_TRUCK_DAY_EUR,
     DEMO_DEPOT_ID,
     DEMO_DISPOSAL_ID,
     DEMO_DISPOSAL_SERVICE_MINUTES,
+    DEMO_OPERATING_DAYS_PER_YEAR,
     DEMO_STOP_SERVICE_MINUTES,
     DEMO_VEHICLE_COUNT_AVAILABLE,
     demo_depot,
@@ -82,6 +87,7 @@ from src.routing.schemas import (
 from src.routing.solver import Route, RoutingSolution, solve
 
 ASSUMPTION_LABEL = "[demo assumption]"
+REPRESENTATIVE_LABEL = "[representative]"
 
 # --- Shared demo constants (§5.1/§5.2.2; single source for the M12 CLI and
 # --- the API endpoints; compare_demo.py re-exports them) ---------------------
@@ -105,6 +111,8 @@ DETERMINISM_NOTE = (
 )
 
 COMPARISON_RUNS = 5  # §4.7 repetition protocol [demo assumption]
+
+_T = TypeVar("_T")
 
 
 # --- Datasets (§5.1 POST /api/datasets, GET /api/summary, /api/containers) ---
@@ -251,41 +259,93 @@ def containers() -> list[schemas.SeriesStatusResponse]:
 
 # --- Config defaults (§5.1 GET /api/config) ----------------------------------
 
+ConfigSourceLabel = Literal["representative", "demo assumption"]
+"""§5.2 v3 ConfigDefaults.sources value type (per-field source labels)."""
+
+ROUTING_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {
+    # §4.6 v3 per-field source labels: [representative] = verbal from the
+    # challenge representative (14 Nov 2026); [demo assumption] = synthetic.
+    "container_volume_litres": "representative",
+    "densities_kg_per_litre": "demo assumption",
+    "vehicle_volume_capacity_litres": "demo assumption",
+    "vehicle_weight_capacity_kg": "demo assumption",
+    "vehicle_count_available": "demo assumption",
+    "vehicle_compartment_volume_litres": "demo assumption",
+    "stop_service_minutes": "representative",
+    "disposal_service_minutes": "demo assumption",
+    "max_shift_minutes": "representative",
+    "travel_time_mode": "representative",
+    "fixed_travel_minutes": "representative",
+    "cost_per_truck_day_eur": "representative",
+    "operating_days_per_week": "representative",
+    "operating_days_per_year": "representative",
+    "geography_seed": "demo assumption",
+    "geography_spread_km": "demo assumption",
+    "avg_speed_kmh": "demo assumption",
+    "detour_factor": "demo assumption",
+    "solver_solution_limit": "demo assumption",
+    "solver_time_limit_s": "demo assumption",
+}
+POLICY_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {
+    name: "demo assumption" for name in schemas.PolicyDefaults.model_fields
+}
+FORECAST_FIELD_SOURCES: dict[str, ConfigSourceLabel] = {"horizon_days": "demo assumption"}
+
 
 def config_defaults() -> schemas.ConfigDefaultsResponse:
-    """§4.6/§3.1 demo defaults plus every demo-assumption field name."""
+    """§4.6 v3/§3.1 demo defaults, every demo-assumption field name, and the
+    v3 ``sources`` map (§4.6 v3 / §5.2: representative vs demo assumption,
+    per field). ``assumption_fields`` lists exactly the fields whose source
+    is a demo assumption — representative fields are identified via
+    ``sources`` so the UI never relabels them as facts."""
     policy = PolicyConfig()
     routing = demo_routing_config()
     vehicle = demo_vehicle_type()
-    defaults = schemas.ConfigDefaultsResponse(
+    sources: dict[str, ConfigSourceLabel] = {
+        **POLICY_FIELD_SOURCES,
+        **FORECAST_FIELD_SOURCES,
+        **ROUTING_FIELD_SOURCES,
+    }
+    if set(ROUTING_FIELD_SOURCES) != set(schemas.RoutingDefaults.model_fields):
+        raise ValueError(  # pragma: no cover - guards an unlabelled v3 field
+            "RoutingDefaults has fields missing from ROUTING_FIELD_SOURCES: "
+            f"{sorted(set(schemas.RoutingDefaults.model_fields) - set(ROUTING_FIELD_SOURCES))}"
+        )
+    return schemas.ConfigDefaultsResponse(
         policy=schemas.PolicyDefaults(
             select_threshold_pct=policy.select_threshold_pct,
             uncertainty_buffer_pct=policy.uncertainty_buffer_pct,
             overfull_always_selected=policy.overfull_always_selected,
         ),
         routing=schemas.RoutingDefaults(
-            container_volume_litres=DEMO_CONTAINER_VOLUME_LITRES,  # litres [demo assumption §4.6]
+            container_volume_litres=DEMO_CONTAINER_VOLUME_LITRES,  # litres [representative §4.6 v3]
             densities_kg_per_litre=dict(routing.densities_kg_per_litre),
             vehicle_volume_capacity_litres=vehicle.volume_capacity_litres,
             vehicle_weight_capacity_kg=vehicle.weight_capacity_kg,
             vehicle_count_available=vehicle.count_available,
+            vehicle_compartment_volume_litres=(
+                dict(vehicle.compartment_volume_litres)
+                if vehicle.compartment_volume_litres is not None
+                else None
+            ),
             stop_service_minutes=DEMO_STOP_SERVICE_MINUTES,
             disposal_service_minutes=DEMO_DISPOSAL_SERVICE_MINUTES,
             max_shift_minutes=routing.max_shift_minutes,
+            travel_time_mode=routing.travel_time_mode,
+            fixed_travel_minutes=routing.fixed_travel_minutes,
+            cost_per_truck_day_eur=routing.cost_per_truck_day_eur,
+            operating_days_per_week=routing.operating_days_per_week,
+            operating_days_per_year=routing.operating_days_per_year,
+            geography_seed=routing.geography_seed,
+            geography_spread_km=routing.geography_spread_km,
             avg_speed_kmh=routing.avg_speed_kmh,
             detour_factor=routing.detour_factor,
             solver_solution_limit=routing.solver_solution_limit,
             solver_time_limit_s=routing.solver_time_limit_s,
         ),
-        assumption_fields=[
-            "select_threshold_pct",
-            "uncertainty_buffer_pct",
-            "overfull_always_selected",
-            "horizon_days",
-            *list(schemas.RoutingDefaults.model_fields),
-        ],
+        assumption_fields=[name for name, source in sources.items() if source == "demo assumption"],
+        sources=sources,
     )
-    return defaults
 
 
 # --- Forecasts (§5.1 POST /api/forecasts) ------------------------------------
@@ -502,6 +562,8 @@ def run_route(
     coordinates = synthetic_stop_coordinates(
         ((c.location_id, c.material_type) for c in solver_candidates),
         depot,
+        seed=routing.config.geography_seed,
+        max_radius_km=routing.config.geography_spread_km,
     )
     stops = [
         Stop(
@@ -599,13 +661,15 @@ class _EffectiveRouting:
 def _effective_routing(
     overrides: schemas.RoutingConfigOverrides | None,
 ) -> _EffectiveRouting:
-    """Merge §4.6 defaults with overrides and validate by constructing the
+    """Merge §4.6 v3 defaults with overrides and validate by constructing the
     domain schemas (RoutingConfig/VehicleType/DisposalSite; §5.3 — their
-    validation messages surface on 422).
+    validation messages surface on 422). v3 fields (``travel_time_mode``,
+    ``fixed_travel_minutes``, cost/operating rates, geography knobs,
+    ``vehicle_compartment_volume_litres``) ride the same constructors: the
+    sum==capacity compartment rule is VehicleType's own validation.
 
     The Pydantic override model already coerced each field to its declared
-    type at the boundary (``int | None``/``float | None``/``dict[MaterialType,
-    float] | None``), so only typed values reach the constructors here.
+    type at the boundary, so only typed values reach the constructors here.
 
     Deployment knob ``WASTECITY_SOLVER_TIME_LIMIT_S`` (``src.api.hosted``)
     supplies the default ``solver_time_limit_s`` when the request does not
@@ -615,6 +679,10 @@ def _effective_routing(
     base_vehicle = demo_vehicle_type()
     base_disposal = demo_disposal_site()
     env_time_limit = hosted.hosted_solver_time_limit_s()
+
+    def _pick(override: _T | None, base: _T) -> _T:
+        """First non-None of (override, base) — the §5.3 merge rule."""
+        return base if override is None else override
 
     def _effective_time_limit(override: float | None) -> tuple[float, bool]:
         """Effective solver_time_limit_s: request override wins, then the
@@ -628,14 +696,7 @@ def _effective_routing(
     if overrides is None:
         time_limit_s, from_env = _effective_time_limit(None)
         if from_env:
-            base_config = RoutingConfig(
-                max_shift_minutes=base_config.max_shift_minutes,
-                densities_kg_per_litre=dict(base_config.densities_kg_per_litre),
-                detour_factor=base_config.detour_factor,
-                avg_speed_kmh=base_config.avg_speed_kmh,
-                solver_solution_limit=base_config.solver_solution_limit,
-                solver_time_limit_s=time_limit_s,
-            )
+            base_config = dataclass_replace(base_config, solver_time_limit_s=time_limit_s)
         return _EffectiveRouting(
             config=base_config,
             vehicle=base_vehicle,
@@ -644,52 +705,48 @@ def _effective_routing(
             stop_service_minutes=DEMO_STOP_SERVICE_MINUTES,
             solver_time_limit_from_env=from_env,
         )
+
     time_limit_s, from_env = _effective_time_limit(overrides.solver_time_limit_s)
     config = RoutingConfig(
-        max_shift_minutes=(
-            overrides.max_shift_minutes
-            if overrides.max_shift_minutes is not None
-            else base_config.max_shift_minutes
+        max_shift_minutes=_pick(overrides.max_shift_minutes, base_config.max_shift_minutes),
+        densities_kg_per_litre=_pick(
+            overrides.densities_kg_per_litre, dict(base_config.densities_kg_per_litre)
         ),
-        densities_kg_per_litre=(
-            overrides.densities_kg_per_litre
-            if overrides.densities_kg_per_litre is not None
-            else dict(base_config.densities_kg_per_litre)
-        ),
-        detour_factor=(
-            overrides.detour_factor
-            if overrides.detour_factor is not None
-            else base_config.detour_factor
-        ),
-        avg_speed_kmh=(
-            overrides.avg_speed_kmh
-            if overrides.avg_speed_kmh is not None
-            else base_config.avg_speed_kmh
-        ),
-        solver_solution_limit=(
-            overrides.solver_solution_limit
-            if overrides.solver_solution_limit is not None
-            else base_config.solver_solution_limit
+        detour_factor=_pick(overrides.detour_factor, base_config.detour_factor),
+        avg_speed_kmh=_pick(overrides.avg_speed_kmh, base_config.avg_speed_kmh),
+        solver_solution_limit=_pick(
+            overrides.solver_solution_limit, base_config.solver_solution_limit
         ),
         solver_time_limit_s=time_limit_s,
+        travel_time_mode=_pick(overrides.travel_time_mode, base_config.travel_time_mode),
+        fixed_travel_minutes=_pick(
+            overrides.fixed_travel_minutes, base_config.fixed_travel_minutes
+        ),
+        cost_per_truck_day_eur=_pick(
+            overrides.cost_per_truck_day_eur, base_config.cost_per_truck_day_eur
+        ),
+        operating_days_per_week=_pick(
+            overrides.operating_days_per_week, base_config.operating_days_per_week
+        ),
+        operating_days_per_year=_pick(
+            overrides.operating_days_per_year, base_config.operating_days_per_year
+        ),
+        geography_seed=_pick(overrides.geography_seed, base_config.geography_seed),
+        geography_spread_km=_pick(overrides.geography_spread_km, base_config.geography_spread_km),
     )
     vehicle = VehicleType(
         id=base_vehicle.id,
         name=base_vehicle.name,
-        volume_capacity_litres=(
-            overrides.vehicle_volume_capacity_litres
-            if overrides.vehicle_volume_capacity_litres is not None
-            else base_vehicle.volume_capacity_litres
+        volume_capacity_litres=_pick(
+            overrides.vehicle_volume_capacity_litres, base_vehicle.volume_capacity_litres
         ),
-        weight_capacity_kg=(
-            overrides.vehicle_weight_capacity_kg
-            if overrides.vehicle_weight_capacity_kg is not None
-            else base_vehicle.weight_capacity_kg
+        weight_capacity_kg=_pick(
+            overrides.vehicle_weight_capacity_kg, base_vehicle.weight_capacity_kg
         ),
-        count_available=(
-            overrides.vehicle_count_available
-            if overrides.vehicle_count_available is not None
-            else base_vehicle.count_available
+        count_available=_pick(overrides.vehicle_count_available, base_vehicle.count_available),
+        compartment_volume_litres=_pick(
+            overrides.vehicle_compartment_volume_litres,
+            base_vehicle.compartment_volume_litres,
         ),
     )
     disposal = DisposalSite(
@@ -697,26 +754,16 @@ def _effective_routing(
         name=base_disposal.name,
         lat=base_disposal.lat,
         lon=base_disposal.lon,
-        service_minutes=(
-            overrides.disposal_service_minutes
-            if overrides.disposal_service_minutes is not None
-            else base_disposal.service_minutes
-        ),
+        service_minutes=_pick(overrides.disposal_service_minutes, base_disposal.service_minutes),
     )
     return _EffectiveRouting(
         config=config,
         vehicle=vehicle,
         disposal=disposal,
-        container_volume_litres=(
-            overrides.container_volume_litres
-            if overrides.container_volume_litres is not None
-            else DEMO_CONTAINER_VOLUME_LITRES
+        container_volume_litres=_pick(
+            overrides.container_volume_litres, DEMO_CONTAINER_VOLUME_LITRES
         ),
-        stop_service_minutes=(
-            overrides.stop_service_minutes
-            if overrides.stop_service_minutes is not None
-            else DEMO_STOP_SERVICE_MINUTES
-        ),
+        stop_service_minutes=_pick(overrides.stop_service_minutes, DEMO_STOP_SERVICE_MINUTES),
         solver_time_limit_from_env=from_env,
     )
 
@@ -742,6 +789,7 @@ def _solution_response(
             distance_m=solution.totals.distance_m,
             duration_min=solution.totals.duration_min,
             collected_volume_litres=solution.totals.collected_volume_litres,
+            collected_volume_by_material=dict(solution.totals.collected_volume_by_material),
             collected_weight_kg=solution.totals.collected_weight_kg,
             stops_served=solution.totals.stops_served,
             stops_total=solution.totals.stops_total,
@@ -752,6 +800,17 @@ def _solution_response(
             basis=schemas.FleetBasisResponse(
                 ceil_by_volume=solution.fleet_recommendation.basis.ceil_by_volume,
                 ceil_by_weight=solution.fleet_recommendation.basis.ceil_by_weight,
+            ),
+        ),
+        travel_time_mode=solution.travel_time_mode,
+        cost=schemas.SolutionCostResponse(
+            vehicles_used=solution.cost.vehicles_used,
+            cost_eur_per_day=solution.cost.cost_eur_per_day,
+            cost_eur_per_year=solution.cost.cost_eur_per_year,
+            fleet_cost=schemas.SolutionFleetCostResponse(
+                trucks=solution.cost.fleet_cost.trucks,
+                cost_eur_per_day=solution.cost.fleet_cost.cost_eur_per_day,
+                cost_eur_per_year=solution.cost.fleet_cost.cost_eur_per_year,
             ),
         ),
         distance_provenance=solution.distance_provenance,
@@ -816,7 +875,9 @@ def _assumption_labels(
     n_selected: int,
     n_capped_out: int,
 ) -> list[str]:
-    """Labelled assumption strings for the §5.2 RouteResponse (§5.3).
+    """Labelled assumption strings for the §5.2 RouteResponse (§5.3), with the
+    §4.6 v3 per-value sources: [representative] (verbal from the challenge
+    representative, 14 Nov 2026) vs [demo assumption] (synthetic).
 
     Deployment knobs (``src.api.hosted``) get explicit "[deployment setting]"
     labels — they are not demo assumptions about the challenge. The stop-cap
@@ -833,7 +894,7 @@ def _assumption_labels(
         "haversine_straight_line_derived, not road distance",
         f"{ASSUMPTION_LABEL} synthetic depot '{DEMO_DEPOT_ID}' and disposal site "
         f"'{DEMO_DISPOSAL_ID}' near Heilbronn",
-        f"{ASSUMPTION_LABEL} container_volume_litres={routing.container_volume_litres}",
+        f"{REPRESENTATIVE_LABEL} container_volume_litres={routing.container_volume_litres}",
         f"{ASSUMPTION_LABEL} densities_kg_per_litre="
         + ", ".join(
             f"{material}={density}" for material, density in config.densities_kg_per_litre.items()
@@ -843,11 +904,25 @@ def _assumption_labels(
         f"{routing.vehicle.volume_capacity_litres} L / "
         f"{routing.vehicle.weight_capacity_kg} kg x "
         f"{routing.vehicle.count_available} available",
-        f"{ASSUMPTION_LABEL} stop_service_minutes={routing.stop_service_minutes}, "
-        f"disposal_service_minutes={routing.disposal.service_minutes}",
-        f"{ASSUMPTION_LABEL} max_shift_minutes={config.max_shift_minutes}",
-        f"{ASSUMPTION_LABEL} avg_speed_kmh={config.avg_speed_kmh}, "
-        f"detour_factor={config.detour_factor} (matrix derivation)",
+        f"{REPRESENTATIVE_LABEL} stop_service_minutes={routing.stop_service_minutes}, "
+        f"{ASSUMPTION_LABEL} disposal_service_minutes={routing.disposal.service_minutes}",
+        f"{REPRESENTATIVE_LABEL} max_shift_minutes={config.max_shift_minutes}",
+        f"{REPRESENTATIVE_LABEL} travel_time_mode={config.travel_time_mode}"
+        + (
+            f", fixed_travel_minutes={config.fixed_travel_minutes} on every leg "
+            "incl. depot/disposal [interpretation — open question]"
+            if config.travel_time_mode == "fixed_per_leg"
+            else f", avg_speed_kmh={config.avg_speed_kmh}, "
+            f"detour_factor={config.detour_factor} (matrix derivation "
+            f"[demo assumption])"
+        ),
+        f"{REPRESENTATIVE_LABEL} cost_per_truck_day_eur={config.cost_per_truck_day_eur:g}, "
+        f"operating_days_per_week={config.operating_days_per_week}, "
+        f"operating_days_per_year={config.operating_days_per_year} (cost figures "
+        "derived from them are [predicted], never invoiced amounts)",
+        f"{ASSUMPTION_LABEL} geography_seed={config.geography_seed}, "
+        f"geography_spread_km={config.geography_spread_km:g} km (synthetic-layout "
+        "sensitivity knobs; defaults reproduce the current coordinates)",
         f"{ASSUMPTION_LABEL} solver_solution_limit={config.solver_solution_limit} "
         "(primary stopping criterion, deterministic; §4.7)",
     ]
@@ -874,6 +949,44 @@ def _assumption_labels(
     return labels
 
 
+# --- Days-to-full (§5.1 GET /api/days-to-full; §5.2.3, v3 2026-11-14) --------
+
+
+def days_to_full() -> schemas.DaysToFullResponse:
+    """§5.2.3 days-to-full estimates for every series of the active dataset,
+    computed by ``src.forecasting.days_to_full`` (§2/§5 modules only — no
+    business logic here). [predicted] from fill history only; the caveats
+    (constant-rate assumption, observed median reading gap) are echoed in
+    ``assumptions``. 404 on no dataset is the shared ``NoDatasetError``
+    mapping (``store.dataset`` raises it)."""
+    result = build_days_to_full(store.dataset)
+    return schemas.DaysToFullResponse(
+        method=result.method,
+        stats=schemas.DaysToFullStatsResponse(
+            series_total=result.stats.series_total,
+            series_with_estimate=result.stats.series_with_estimate,
+            median_days=result.stats.median_days,
+            mean_days=result.stats.mean_days,
+            min_days=result.stats.min_days,
+            max_days=result.stats.max_days,
+        ),
+        series=[
+            schemas.DaysToFullSeriesResponse(
+                location_id=row.location_id,
+                material_type=row.material_type,
+                last_date=row.last_date,
+                last_fill_pct=row.last_fill_pct,
+                last_is_overfull=row.last_is_overfull,
+                rate_pct_per_day=row.rate_pct_per_day,
+                days_to_full=row.days_to_full,
+                reason=row.reason,
+            )
+            for row in result.series
+        ],
+        assumptions=list(result.assumptions),
+    )
+
+
 # --- Comparison (§5.1 GET /api/comparison; §5.2.2; shared with the M12 CLI) --
 
 
@@ -891,6 +1004,7 @@ class ComparisonRun:
     scenarios: list[schemas.ComparisonScenarioResponse]
     gains: schemas.ComparisonGainsResponse
     optimised_determinism: schemas.OptimisedDeterminismResponse
+    fleet_budget: schemas.FleetBudgetResponse
     distance_provenance: str
     assumptions: list[str]
 
@@ -1049,8 +1163,24 @@ def run_comparison(
         scenarios=scenarios,
         gains=gains,
         optimised_determinism=determinism,
+        fleet_budget=_fleet_budget(optimised_median),
         distance_provenance=optimised_median.solution.distance_provenance,
         assumptions=_comparison_assumptions(optimised_median),
+    )
+
+
+def _fleet_budget(optimised: schemas.RouteResponse) -> schemas.FleetBudgetResponse:
+    """§5.2.2 ``fleet_budget`` — the ortools scenario's fleet recommendation
+    priced at the §4.6 v3 rates (decision ③): ``trucks`` =
+    ``fleet_recommendation.count``; per-day = trucks x
+    ``cost_per_truck_day_eur``; per-year = per-day x ``operating_days_per_year``
+    (the solver's ``cost.fleet_cost`` block, which derives exactly this)."""
+    solution = optimised.solution
+    return schemas.FleetBudgetResponse(
+        vehicle_type_id=solution.fleet_recommendation.vehicle_type_id,
+        trucks=solution.fleet_recommendation.count,
+        cost_eur_per_day=solution.cost.fleet_cost.cost_eur_per_day,
+        cost_eur_per_year=solution.cost.fleet_cost.cost_eur_per_year,
     )
 
 
@@ -1063,9 +1193,18 @@ def _ratio_1dp(distance_m: int, denominator: int) -> float | None:
     return round(distance_m / denominator, 1)
 
 
+def _cost_eur_per_day_and_year(vehicles_used: int) -> tuple[float, float]:
+    """§4.6 v3 derived cost: ``vehicles_used x cost_per_truck_day_eur``, then
+    ``x operating_days_per_year``. [predicted] derived, never invoiced."""
+    cost_per_day = vehicles_used * DEMO_COST_PER_TRUCK_DAY_EUR
+    return cost_per_day, cost_per_day * DEMO_OPERATING_DAYS_PER_YEAR
+
+
 def _naive_scenario_row(
     method: schemas.ComparisonMethod, naive: NaiveSolution
 ) -> schemas.ComparisonScenarioResponse:
+    config = demo_routing_config()  # §4.6 v3 cost rates + mode echo
+    cost_per_day, cost_per_year = _cost_eur_per_day_and_year(len(naive.routes))
     return schemas.ComparisonScenarioResponse(
         method=method,
         status=naive.status,
@@ -1085,6 +1224,9 @@ def _naive_scenario_row(
         ),
         distance_per_stop_m=_ratio_1dp(naive.totals.distance_m, naive.totals.stops_served),
         distance_per_kg_m=_ratio_1dp(naive.totals.distance_m, naive.totals.collected_weight_kg),
+        travel_time_mode=config.travel_time_mode,
+        cost_eur_per_day=cost_per_day,
+        cost_eur_per_year=cost_per_year,
     )
 
 
@@ -1110,6 +1252,9 @@ def _ortools_scenario_row(
         distance_per_kg_m=_ratio_1dp(
             solution.totals.distance_m, solution.totals.collected_weight_kg
         ),
+        travel_time_mode=solution.travel_time_mode,
+        cost_eur_per_day=solution.cost.cost_eur_per_day,
+        cost_eur_per_year=solution.cost.cost_eur_per_year,
     )
 
 
@@ -1164,6 +1309,7 @@ def comparison() -> schemas.ComparisonResponse:
         scenarios=run.scenarios,
         gains=run.gains,
         optimised_determinism=run.optimised_determinism,
+        fleet_budget=run.fleet_budget,
         distance_provenance=run.distance_provenance,
         assumptions=run.assumptions,
     )

@@ -101,3 +101,10 @@ async def comparison() -> schemas.ComparisonResponse:
     """§5.2.2 naive-vs-optimised comparison on the active dataset with the
     fixed v1 defaults echoed; 404 without a dataset (§5.1)."""
     return services.comparison()
+
+
+@router.get("/days-to-full", response_model=schemas.DaysToFullResponse)
+async def days_to_full() -> schemas.DaysToFullResponse:
+    """§5.2.3 days-to-full estimates per series from fill history only;
+    404 without a dataset (§5.1)."""
+    return services.days_to_full()

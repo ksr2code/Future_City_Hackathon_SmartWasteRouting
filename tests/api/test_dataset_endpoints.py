@@ -214,7 +214,7 @@ class TestConfig:
             "overfull_always_selected": True,
         }
         routing = body["routing"]
-        assert routing["container_volume_litres"] == 1900
+        assert routing["container_volume_litres"] == 3000  # [representative §4.6 v3]
         assert routing["densities_kg_per_litre"] == {
             "brown": 0.5,
             "green": 0.5,
@@ -223,17 +223,45 @@ class TestConfig:
         assert routing["vehicle_volume_capacity_litres"] == 12_000
         assert routing["vehicle_weight_capacity_kg"] == 10_000
         assert routing["vehicle_count_available"] == 3
-        assert routing["stop_service_minutes"] == 10
+        assert routing["vehicle_compartment_volume_litres"] is None  # equal thirds
+        assert routing["stop_service_minutes"] == 5  # [representative §4.6 v3]
         assert routing["disposal_service_minutes"] == 30
-        assert routing["max_shift_minutes"] == 480
+        assert routing["max_shift_minutes"] == 480  # [representative §4.6 v3]
+        assert routing["travel_time_mode"] == "fixed_per_leg"  # [representative §4.6 v3]
+        assert routing["fixed_travel_minutes"] == 10  # [representative §4.6 v3]
+        assert routing["cost_per_truck_day_eur"] == 500.0  # [representative §4.6 v3]
+        assert routing["operating_days_per_week"] == 5  # [representative §4.6 v3]
+        assert routing["operating_days_per_year"] == 200  # [representative §4.6 v3]
+        assert routing["geography_seed"] == 0  # current SHA-256 layout
+        assert routing["geography_spread_km"] == 6.0  # current 1-6 km band
         assert routing["avg_speed_kmh"] == 30.0
         assert routing["detour_factor"] == 1.4
         assert routing["solver_solution_limit"] == 200  # §4.6 v2 primary stop
         assert routing["solver_time_limit_s"] == 30.0  # §4.6 v2 safety cap only
 
-    def test_config_labels_every_demo_assumption_field(self, client: TestClient) -> None:
+    def test_config_sources_map_and_assumption_fields_match_v3(self, client: TestClient) -> None:
+        """§4.6 v3/§5.2: every routing field carries a per-field source;
+        ``assumption_fields`` lists exactly the demo-assumption fields —
+        [representative] fields are identified via ``sources`` only."""
         body = client.get("/api/config").json()
+        sources = body["sources"]
+        routing_fields = set(body["routing"])
+        policy_fields = set(body["policy"])
+        assert routing_fields <= set(sources)
+        assert policy_fields <= set(sources)
+        assert sources["horizon_days"] == "demo assumption"
+        representative = {name for name, source in sources.items() if source == "representative"}
+        assert representative == {
+            "container_volume_litres",
+            "stop_service_minutes",
+            "max_shift_minutes",
+            "travel_time_mode",
+            "fixed_travel_minutes",
+            "cost_per_truck_day_eur",
+            "operating_days_per_week",
+            "operating_days_per_year",
+        }
         labelled = set(body["assumption_fields"])
-        assert set(body["policy"]) <= labelled
-        assert set(body["routing"]) <= labelled
-        assert "horizon_days" in labelled  # forecast default 28 [demo assumption]
+        # Representative fields are NOT demo assumptions (contract §5.2 v3).
+        assert representative.isdisjoint(labelled)
+        assert (policy_fields | {"horizon_days"} | routing_fields) - representative == labelled

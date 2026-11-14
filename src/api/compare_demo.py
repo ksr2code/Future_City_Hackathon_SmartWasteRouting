@@ -52,7 +52,11 @@ from src.api.services import (
     upload_dataset,
 )
 from src.api.services import run_comparison as run_comparison_core
-from src.routing.demo_config import demo_vehicle_type
+from src.routing.demo_config import (
+    DEMO_COST_PER_TRUCK_DAY_EUR,
+    DEMO_OPERATING_DAYS_PER_YEAR,
+    demo_vehicle_type,
+)
 from src.routing.naive import SWEEP_CELL_SIZE_DEG, NaiveSolution
 
 # CLI-facing names for the single server-side/API shared constants (§5.1/§5.2.2);
@@ -66,6 +70,20 @@ DEFAULT_HORIZON_DAYS = COMPARISON_HORIZON_DAYS_DEFAULT  # [demo assumption]
 DETOUR_NOTE = (
     'great-circle haversine x detour factor (§4.6) [demo assumption]; never "road '
     'distance" — no road network data exists [observed]'
+)
+
+V3_PARAMETERS_NOTE = (
+    "v3 parameter change (2026-11-14): the comparison now runs on the §4.6 v3 "
+    "representative parameters — container_volume_litres=3000 [representative], "
+    "stop_service_minutes=5 [representative], travel_time_mode=fixed_per_leg with "
+    "fixed_travel_minutes=10 on every leg [representative + interpretation], "
+    "cost_per_truck_day_eur=500, operating_days_per_week=5, "
+    "operating_days_per_year=200 [representative] — alongside the unchanged "
+    "[demo assumption] values (vehicle 12,000 L / 10,000 kg x 3, densities 0.5 "
+    "kg/litre, disposal unload 30 min, shift 480 min, geography knobs, solver "
+    "budget). All numbers below supersede the v2 demo numbers, which remain "
+    "recorded in docs/PROGRESS.md (M12/M13 history) only. Cost figures are "
+    "[predicted] derivations, never invoiced amounts (§4.4)."
 )
 
 SCENARIO_HEADINGS: dict[str, str] = {
@@ -159,6 +177,12 @@ def _ratio(value: float | None) -> str:
     return str(value)
 
 
+def _eur(value: float) -> str:
+    """Money rendering: thousands separators, never scientific notation, no
+    decimals (costs are whole euros at the §4.6 rates)."""
+    return f"{value:,.0f}"
+
+
 def _median_number(value: float) -> str:
     """Render the determinism median without a spurious ``.0`` (the value is
     the median of integer distances; a half-integer stays explicit)."""
@@ -177,6 +201,7 @@ def _scenario_table(row: api_schemas.ComparisonScenarioResponse) -> list[str]:
         f"| stops visited | {row.stops_served} / {row.stops_total} |",
         f"| vehicles available | {row.vehicles_available} x {vehicle.id} [demo assumption §4.6] |",
         f"| vehicles used | {row.vehicles_used} |",
+        f"| travel_time_mode | {row.travel_time_mode} (§4.6 v3) |",
         f"| collected volume litres | {row.collected_volume_litres} |",
         f"| collected weight kg | {row.collected_weight_kg} |",
         f"| unserved stops | {row.unserved_count} (each with a reason in the solution) |",
@@ -185,6 +210,11 @@ def _scenario_table(row: api_schemas.ComparisonScenarioResponse) -> list[str]:
         f"ceil_by_weight {row.fleet_basis.ceil_by_weight}) |",
         f"| distance per stop served (m) | {_ratio(row.distance_per_stop_m)} |",
         f"| distance per collected kg (m) | {_ratio(row.distance_per_kg_m)} |",
+        f"| cost EUR/day | {_eur(row.cost_eur_per_day)} "
+        f"({row.vehicles_used} x {DEMO_COST_PER_TRUCK_DAY_EUR:g} EUR/truck-day "
+        "[representative]; [predicted] derived, never invoiced — §4.3/§4.4) |",
+        f"| cost EUR/year | {_eur(row.cost_eur_per_year)} "
+        f"(x {DEMO_OPERATING_DAYS_PER_YEAR:g} operating days/year [representative]) |",
     ]
 
 
@@ -261,7 +291,9 @@ def _render_markdown(
     lines: list[str] = []
     add = lines.append
 
-    add("# Demo numbers — naive sweep vs optimised comparison (M12 v2)")
+    add("# Demo numbers — naive sweep vs optimised comparison (M15 v3)")
+    add("")
+    add(V3_PARAMETERS_NOTE)
     add("")
     add(
         f"Reproducing command: `python -m src.api.compare_demo` (writes `{output_path}`; "
@@ -312,6 +344,19 @@ def _render_markdown(
     add("## Gains (derived, metres — contract §4.7)")
     add("")
     lines.extend(_gains_lines(run))
+    add("")
+    add("## Fleet budget (ortools recommendation x §4.6 v3 cost rates)")
+    add("")
+    budget = run.fleet_budget
+    add(
+        f"- fleet_budget: {budget.trucks} x {budget.vehicle_type_id} — "
+        f"{_eur(budget.cost_eur_per_day)} EUR/day ({budget.trucks} x "
+        f"{DEMO_COST_PER_TRUCK_DAY_EUR:g} EUR/truck-day [representative]), "
+        f"{_eur(budget.cost_eur_per_year)} EUR/year (x "
+        f"{DEMO_OPERATING_DAYS_PER_YEAR:g} operating days/year [representative]). "
+        "Covers full demand incl. unserved stops (§4.4); [predicted] derived, "
+        "never invoiced amounts (§4.4)."
+    )
     add("")
     add(
         f"## Optimised determinism (§4.7 repetition protocol, "

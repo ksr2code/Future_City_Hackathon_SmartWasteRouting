@@ -134,6 +134,30 @@ class TestComparison:
         assert any("area sweep" in label for label in assumptions)  # naive order
         assert any("lexicographic" in label for label in assumptions)  # within-cell order
 
+    def test_scenarios_echo_v3_travel_mode_and_cost(self, comparison_body: dict) -> None:
+        """§5.2.2 v3: every scenario row echoes the effective mode and the
+        derived cost (vehicles_used x §4.6 rates; [predicted], never invoiced)."""
+        for scenario in comparison_body["scenarios"]:
+            assert scenario["travel_time_mode"] == "fixed_per_leg"
+            assert scenario["cost_eur_per_day"] == scenario["vehicles_used"] * 500.0
+            assert scenario["cost_eur_per_year"] == scenario["cost_eur_per_day"] * 200
+
+    def test_fleet_budget_matches_the_ortools_recommendation(self, comparison_body: dict) -> None:
+        """§5.2.2 fleet_budget: the ortools fleet recommendation priced at the
+        §4.6 v3 rates (decision ③; [predicted] derived, never invoiced)."""
+        ortools = comparison_body["scenarios"][2]
+        budget = comparison_body["fleet_budget"]
+        assert set(budget) == {
+            "vehicle_type_id",
+            "trucks",
+            "cost_eur_per_day",
+            "cost_eur_per_year",
+        }
+        assert budget["vehicle_type_id"] == "demo_truck"
+        assert budget["trucks"] == ortools["recommended_trucks"]
+        assert budget["cost_eur_per_day"] == budget["trucks"] * 500.0
+        assert budget["cost_eur_per_year"] == budget["cost_eur_per_day"] * 200
+
 
 class TestDemoDataset:
     def test_demo_upload_loads_fixed_server_csv(self, client: TestClient) -> None:

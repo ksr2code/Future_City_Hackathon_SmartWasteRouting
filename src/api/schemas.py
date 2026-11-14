@@ -24,6 +24,7 @@ ReasonCode = Literal[
 ]
 MaterialType = Literal["brown", "green", "white"]
 SolutionStatus = Literal["optimal", "feasible", "infeasible", "timeout"]
+TravelTimeMode = Literal["fixed_per_leg", "haversine_derived"]
 
 FORECAST_METHOD_DEFAULT: Method = "persistence"
 HORIZON_DAYS_DEFAULT = 28  # days [demo assumption — observed median reading gap]
@@ -99,16 +100,24 @@ class PolicyDefaults(BaseModel):
 
 
 class RoutingDefaults(BaseModel):
-    """§4.6 values; v1 applies vehicle fields to the single demo type."""
+    """§4.6 v3 values; vehicle fields apply to the single demo type."""
 
     container_volume_litres: int
     densities_kg_per_litre: dict[MaterialType, float]
     vehicle_volume_capacity_litres: int
     vehicle_weight_capacity_kg: int
     vehicle_count_available: int
+    vehicle_compartment_volume_litres: dict[MaterialType, int] | None
     stop_service_minutes: int
     disposal_service_minutes: int
     max_shift_minutes: int
+    travel_time_mode: TravelTimeMode
+    fixed_travel_minutes: int
+    cost_per_truck_day_eur: float
+    operating_days_per_week: int
+    operating_days_per_year: int
+    geography_seed: int
+    geography_spread_km: float
     avg_speed_kmh: float
     detour_factor: float
     solver_solution_limit: int
@@ -117,11 +126,14 @@ class RoutingDefaults(BaseModel):
 
 class ConfigDefaultsResponse(BaseModel):
     """§5.2 ConfigDefaults: demo defaults plus the names of every field that
-    is a demo assumption (policy + routing + forecast horizon)."""
+    is a demo assumption (policy + routing + forecast horizon) and the v3
+    per-field ``sources`` map (§4.6 v3: "representative" vs
+    "demo assumption")."""
 
     policy: PolicyDefaults
     routing: RoutingDefaults
     assumption_fields: list[str]
+    sources: dict[str, Literal["representative", "demo assumption"]]
 
 
 # --- Forecasts (§5.2 ForecastRequest/Response; records from §2.2) ------------
@@ -226,9 +238,17 @@ class RoutingConfigOverrides(BaseModel):
     vehicle_volume_capacity_litres: int | None = None
     vehicle_weight_capacity_kg: int | None = None
     vehicle_count_available: int | None = None
+    vehicle_compartment_volume_litres: dict[MaterialType, int] | None = None
     stop_service_minutes: int | None = None
     disposal_service_minutes: int | None = None
     max_shift_minutes: int | None = None
+    travel_time_mode: TravelTimeMode | None = None
+    fixed_travel_minutes: int | None = None
+    cost_per_truck_day_eur: float | None = None
+    operating_days_per_week: int | None = None
+    operating_days_per_year: int | None = None
+    geography_seed: int | None = None
+    geography_spread_km: float | None = None
     avg_speed_kmh: float | None = None
     detour_factor: float | None = None
     solver_solution_limit: int | None = None
@@ -296,6 +316,7 @@ class SolutionTotalsResponse(BaseModel):
     distance_m: int
     duration_min: int
     collected_volume_litres: int
+    collected_volume_by_material: dict[MaterialType, int]  # litres per material (§4.3 v3)
     collected_weight_kg: int
     stops_served: int
     stops_total: int
@@ -312,9 +333,32 @@ class FleetRecommendationResponse(BaseModel):
     basis: FleetBasisResponse
 
 
+class SolutionFleetCostResponse(BaseModel):
+    """§4.3 v3 ``cost.fleet_cost`` — the fleet-recommendation cost
+    (``trucks`` = ``fleet_recommendation.count``). All figures [predicted]
+    derived from the §4.6 cost parameters, never invoiced amounts (§4.4)."""
+
+    trucks: int
+    cost_eur_per_day: float
+    cost_eur_per_year: float
+
+
+class SolutionCostResponse(BaseModel):
+    """§4.3 v3 cost block — pure derivations: ``cost_eur_per_day =
+    vehicles_used x cost_per_truck_day_eur``; ``cost_eur_per_year =
+    cost_eur_per_day x operating_days_per_year``. [predicted] derived,
+    never invoiced amounts (§4.4)."""
+
+    vehicles_used: int
+    cost_eur_per_day: float
+    cost_eur_per_year: float
+    fleet_cost: SolutionFleetCostResponse
+
+
 class RoutingSolutionResponse(BaseModel):
     """§4.3 RoutingSolution; status infeasible/timeout keeps selection+solution
-    with unserved reasons (§5.3)."""
+    with unserved reasons (§5.3). v3 adds the ``travel_time_mode`` echo and
+    the derived ``cost`` block."""
 
     status: SolutionStatus
     objective_value: int | None
@@ -322,6 +366,8 @@ class RoutingSolutionResponse(BaseModel):
     unserved: list[UnservedStopResponse]
     totals: SolutionTotalsResponse
     fleet_recommendation: FleetRecommendationResponse
+    travel_time_mode: TravelTimeMode  # echoed effective mode (§4.2/§4.3 v3)
+    cost: SolutionCostResponse
     distance_provenance: str
 
 
@@ -359,6 +405,9 @@ class ComparisonScenarioResponse(BaseModel):
     fleet_basis: FleetBasisResponse
     distance_per_stop_m: float | None  # distance_m / stops_served, 1 d.p.
     distance_per_kg_m: float | None  # distance_m / collected_weight_kg, 1 d.p.
+    travel_time_mode: TravelTimeMode  # echoed effective mode (§4.6 v3)
+    cost_eur_per_day: float  # [predicted] vehicles_used x cost_per_truck_day_eur
+    cost_eur_per_year: float  # [predicted] cost_eur_per_day x operating_days_per_year
 
 
 class ComparisonGainsResponse(BaseModel):
@@ -385,10 +434,23 @@ class OptimisedDeterminismResponse(BaseModel):
     distance_m_max: int
 
 
+class FleetBudgetResponse(BaseModel):
+    """§5.2.2 ``fleet_budget`` — the ortools scenario's fleet recommendation
+    priced at the §4.6 cost rates (decision ③). [predicted] derived, never
+    invoiced amounts (§4.4)."""
+
+    vehicle_type_id: str
+    trucks: int
+    cost_eur_per_day: float
+    cost_eur_per_year: float
+
+
 class ComparisonResponse(BaseModel):
     """§5.2.2 v2 scenario comparison with gain decomposition; fixed CLI
     defaults (as_of 2026-09-30, horizon 28, persistence) echoed. Distances
-    are haversine_straight_line_derived — never called road distance."""
+    are haversine_straight_line_derived — never called road distance.
+    v3 adds the per-scenario travel_time_mode/cost fields and the
+    ``fleet_budget`` block (ortools fleet recommendation x §4.6 rates)."""
 
     as_of_date: date
     target_date: date
@@ -397,5 +459,50 @@ class ComparisonResponse(BaseModel):
     scenarios: list[ComparisonScenarioResponse]  # §4.7 ids, fixed order
     gains: ComparisonGainsResponse
     optimised_determinism: OptimisedDeterminismResponse
+    fleet_budget: FleetBudgetResponse
     distance_provenance: str
+    assumptions: list[str]
+
+
+# --- Days-to-full (§5.1 GET /api/days-to-full; §5.2.3, v3 2026-11-14) --------
+
+
+DaysToFullReason = Literal["no_numeric_history", "no_positive_rate", "already_full"]
+
+
+class DaysToFullSeriesResponse(BaseModel):
+    """One §5.2.3 per-series row. ``days_to_full`` is ``None`` exactly when
+    ``reason`` is set and is not ``already_full`` (§5.2.3: ``already_full``
+    keeps ``days_to_full = 0.0`` — a state fact, not an estimate)."""
+
+    location_id: str
+    material_type: MaterialType
+    last_date: date
+    last_fill_pct: int | None  # None iff last_is_overfull (§1.1: never coerced)
+    last_is_overfull: bool
+    rate_pct_per_day: float | None  # median positive consecutive-pair rate
+    days_to_full: float | None  # max(0, (100 - last numeric fill) / rate), 1 d.p.
+    reason: DaysToFullReason | None  # None iff days_to_full present
+
+
+class DaysToFullStatsResponse(BaseModel):
+    """Aggregate stats over series with an estimate only; nulls when none."""
+
+    series_total: int
+    series_with_estimate: int
+    median_days: float | None
+    mean_days: float | None
+    min_days: float | None
+    max_days: float | None
+
+
+class DaysToFullResponse(BaseModel):
+    """§5.2.3 response: [predicted] per-series days-to-full estimates from
+    fill history only (no collection events exist in the data). Caveats are
+    echoed in ``assumptions`` (§5.2.3: median reading gap [observed];
+    constant-rate/no-emptying assumption)."""
+
+    method: Literal["median_positive_pair_rate"]
+    stats: DaysToFullStatsResponse
+    series: list[DaysToFullSeriesResponse]
     assumptions: list[str]

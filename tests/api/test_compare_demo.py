@@ -1,4 +1,4 @@
-"""Compare-demo CLI tests (M12 v2) — docs/contracts.md §4.6/§4.7/§5.2.2.
+"""Compare-demo CLI tests (M15 v3) — docs/contracts.md §4.6/§4.7/§5.2.2.
 
 Runs the §4.7 comparison on a small **synthetic** CSV (SYNTHETIC-prefixed
 ids, hand-authored — never real data) and pins the generated document's
@@ -29,13 +29,14 @@ SYN-CMP-3,white,2026-09-05,overfull
 SYN-CMP-4,brown,2026-09-12,20
 """
 
-# Hand-computed expectations (container 1900 L, density 0.5 kg/l [demo §4.6]):
-# persistence fills at as_of: CMP-1 90 -> 1710 L / 855 kg, CMP-2 80 -> 1520 L /
-# 760 kg, CMP-4 20 -> 380 L / 190 kg, CMP-3 no persistence -> 0 L / 0 kg.
-EXPECTED_LITRES_ALL = 1710 + 1520 + 0 + 380  # 3610 — naive_sweep_all (4 series)
-EXPECTED_KG_ALL = 855 + 760 + 0 + 190  # 1805
-EXPECTED_LITRES_SELECTED = 1710 + 1520  # 3230 — selected scenarios (90 + 80)
-EXPECTED_KG_SELECTED = 855 + 760  # 1615
+# Hand-computed expectations (container 3000 L [representative §4.6 v3],
+# density 0.5 kg/l [demo assumption §4.6]): persistence fills at as_of:
+# CMP-1 90 -> 2700 L / 1350 kg, CMP-2 80 -> 2400 L / 1200 kg, CMP-4 20 ->
+# 600 L / 300 kg, CMP-3 no persistence -> 0 L / 0 kg.
+EXPECTED_LITRES_ALL = 2700 + 2400 + 0 + 600  # 5700 — naive_sweep_all (4 series)
+EXPECTED_KG_ALL = 1350 + 1200 + 0 + 300  # 2850
+EXPECTED_LITRES_SELECTED = 2700 + 2400  # 5100 — selected scenarios (90 + 80)
+EXPECTED_KG_SELECTED = 1350 + 1200  # 2550
 
 SCENARIO_ORDER = ["naive_sweep_all", "naive_sweep_selected", "ortools"]
 
@@ -94,6 +95,10 @@ def test_ortools_row_is_the_median_run_pipeline(comparison: ComparisonResult) ->
     assert ortools_row.collected_weight_kg == EXPECTED_KG_SELECTED
     assert solution.unserved == []
     assert solution.distance_provenance == "haversine_straight_line_derived"
+    # §4.3/§5.2.2 v3: mode echo + derived cost on the scenario row.
+    assert ortools_row.travel_time_mode == "fixed_per_leg"
+    assert ortools_row.cost_eur_per_day == 1 * 500.0  # vehicles_used x rate
+    assert ortools_row.cost_eur_per_year == 500.0 * 200
 
 
 def test_sweep_all_collected_quantities_match_hand_check(
@@ -113,9 +118,20 @@ def test_scenario_rows_reconcile_and_echo_demo_fleet(
         assert row.distance_m >= 0
         assert row.duration_min >= 0
         assert set(row.fleet_basis.model_dump()) == {"ceil_by_volume", "ceil_by_weight"}
-        # Fleet recommendation covers full demand: ceil(3610/12000)=1,
-        # ceil(1805/10000)=1 (demo_truck §4.6) for the all-sweep.
+        # §5.2.2 v3: cost fields derive from the §4.6 rates on every row.
+        assert row.travel_time_mode == "fixed_per_leg"
+        assert row.cost_eur_per_day == row.vehicles_used * 500.0
+        assert row.cost_eur_per_year == row.cost_eur_per_day * 200
+        # Fleet recommendation covers full demand: ceil(5700/12000)=1,
+        # ceil(2850/10000)=1 (demo_truck §4.6) for the all-sweep.
     assert comparison.run.scenarios[0].recommended_trucks == 1
+    # §5.2.2 fleet_budget: the ortools recommendation priced at the same rates.
+    budget = comparison.run.fleet_budget
+    ortools_row = comparison.run.scenarios[2]
+    assert budget.vehicle_type_id == "demo_truck"
+    assert budget.trucks == ortools_row.recommended_trucks
+    assert budget.cost_eur_per_day == budget.trucks * 500.0
+    assert budget.cost_eur_per_year == budget.cost_eur_per_day * 200
 
 
 def test_per_stop_and_per_kg_metrics_match_rows(comparison: ComparisonResult) -> None:
@@ -178,9 +194,12 @@ def test_document_labels_and_structure(comparison: ComparisonResult) -> None:
     assert "Scenario 1" in markdown and "Scenario 2" in markdown and "Scenario 3" in markdown
     assert "## Gains" in markdown
     assert "## Optimised determinism" in markdown
+    assert "## Fleet budget" in markdown  # §5.2.2 v3 fleet-budget section
     assert "haversine_straight_line_derived" in markdown
     assert 'never "road distance"' in markdown  # AGENTS rule 9 / contract §4.2
     assert "[demo assumption]" in markdown
+    assert "[representative]" in markdown  # §4.6 v3 per-value sources
+    assert "v3 parameter change" in markdown  # supersession note
     assert "detour factor" in markdown
     assert "python -m src.api.compare_demo" in markdown
     assert "solution budget" in markdown  # DETERMINISM_NOTE (§4.4/§4.7)
@@ -188,6 +207,8 @@ def test_document_labels_and_structure(comparison: ComparisonResult) -> None:
     assert "area sweep" in markdown
     assert "distance per stop served" in markdown
     assert "distance per collected kg" in markdown
+    assert "travel_time_mode" in markdown  # v3 mode echo per scenario
+    assert "cost EUR/day" in markdown and "cost EUR/year" in markdown
 
 
 def test_document_numbers_match_the_run(comparison: ComparisonResult) -> None:
@@ -205,6 +226,12 @@ def test_document_numbers_match_the_run(comparison: ComparisonResult) -> None:
     assert str(gains.selection_gain_m) in markdown
     det = comparison.run.optimised_determinism
     assert str(det.distance_m_min) in markdown and str(det.distance_m_max) in markdown
+    # Fleet-budget line: money with thousands separators, no scientific
+    # notation (renderer _eur), trucks = the ortools recommendation.
+    budget = comparison.run.fleet_budget
+    assert f"fleet_budget: {budget.trucks} x {budget.vehicle_type_id}" in markdown
+    assert f"{budget.cost_eur_per_day:,.0f} EUR/day" in markdown
+    assert f"{budget.cost_eur_per_year:,.0f} EUR/year" in markdown
 
 
 def test_determinism_mode_wording_matches(comparison: ComparisonResult) -> None:

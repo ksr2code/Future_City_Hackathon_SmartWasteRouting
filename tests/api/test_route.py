@@ -24,6 +24,7 @@ ALL_ENDPOINTS = {
     "/api/candidates",
     "/api/route",
     "/api/comparison",
+    "/api/days-to-full",
 }
 
 
@@ -73,7 +74,11 @@ class TestRoute:
         ).json()
         assumptions = body["assumptions"]
         assert assumptions
-        assert all("[demo assumption]" in label for label in assumptions)
+        # Every label carries its §4.6 v3 source: [demo assumption] or
+        # [representative] (deployment-setting labels only with env knobs).
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label for label in assumptions
+        )
         joined = "\n".join(assumptions)
         assert "synthetic" in joined.lower()  # synthetic geography labelled
         assert "not road distance" in joined.lower()  # provenance labelled
@@ -122,6 +127,123 @@ class TestRoute:
         )
         assert response.status_code == 422
         assert "densities_kg_per_litre" in response.json()["detail"]
+
+    def test_route_v3_cost_override_echoed_in_cost_block(self, client: TestClient) -> None:
+        """§4.6 v3/§4.3: cost_per_truck_day_eur override rides the
+        RoutingConfig constructor and the derived cost block echoes it."""
+        upload_csv(client)
+        body = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {
+                    "solver_time_limit_s": 0.5,
+                    "cost_per_truck_day_eur": 750.0,
+                    "operating_days_per_year": 100,
+                },
+            },
+        ).json()
+        cost = body["solution"]["cost"]
+        vehicles_used = len(body["solution"]["routes"])
+        assert cost["vehicles_used"] == vehicles_used
+        assert cost["cost_eur_per_day"] == vehicles_used * 750.0
+        assert cost["cost_eur_per_year"] == vehicles_used * 750.0 * 100
+        fleet_cost = cost["fleet_cost"]
+        assert fleet_cost["trucks"] == body["solution"]["fleet_recommendation"]["count"]
+        assert fleet_cost["cost_eur_per_day"] == fleet_cost["trucks"] * 750.0
+        assert fleet_cost["cost_eur_per_year"] == fleet_cost["cost_eur_per_day"] * 100
+
+    def test_route_travel_time_mode_override_echoed(self, client: TestClient) -> None:
+        """§4.6 v3: travel_time_mode selects the matrix duration derivation;
+        the solution echoes the effective mode."""
+        upload_csv(client)
+        body = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {
+                    "solver_time_limit_s": 0.5,
+                    "travel_time_mode": "haversine_derived",
+                },
+            },
+        ).json()
+        assert body["solution"]["travel_time_mode"] == "haversine_derived"
+        # Default mode is fixed_per_leg with 10-minute legs (§4.6 v3).
+        default = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {"solver_time_limit_s": 0.5},
+            },
+        ).json()
+        assert default["solution"]["travel_time_mode"] == "fixed_per_leg"
+
+    def test_route_compartment_override_reaches_solution_totals(self, client: TestClient) -> None:
+        """§4.2/§4.3 v3: an explicit compartment layout (validated by the
+        VehicleType constructor, sum == volume capacity) surfaces via
+        totals.collected_volume_by_material."""
+        upload_csv(client)
+        body = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {
+                    "solver_time_limit_s": 0.5,
+                    "vehicle_compartment_volume_litres": {
+                        "brown": 6000,
+                        "green": 4000,
+                        "white": 2000,
+                    },
+                },
+            },
+        ).json()
+        assert body["solution"]["status"] in {"optimal", "feasible"}
+        by_material = body["solution"]["totals"]["collected_volume_by_material"]
+        assert set(by_material) == {"brown", "green", "white"}
+        assert sum(by_material.values()) == body["solution"]["totals"]["collected_volume_litres"]
+
+    def test_route_compartment_sum_mismatch_422(self, client: TestClient) -> None:
+        """§4.2: compartments must sum to the volume capacity — the domain
+        VehicleType message surfaces on 422 (§5.3)."""
+        upload_csv(client)
+        response = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {
+                    "vehicle_compartment_volume_litres": {
+                        "brown": 5000,
+                        "green": 5000,
+                        "white": 5000,
+                    },
+                },
+            },
+        )
+        assert response.status_code == 422
+        assert "compartment" in response.json()["detail"]
+
+    def test_route_invalid_travel_time_mode_422(self, client: TestClient) -> None:
+        upload_csv(client)
+        response = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {"travel_time_mode": "teleport"},
+            },
+        )
+        assert response.status_code == 422  # Pydantic Literal rejects at the boundary
+
+    def test_route_invalid_fixed_travel_minutes_422(self, client: TestClient) -> None:
+        upload_csv(client)
+        response = client.post(
+            "/api/route",
+            json={
+                "as_of_date": AS_OF,
+                "routing_config": {"fixed_travel_minutes": 0},
+            },
+        )
+        assert response.status_code == 422
+        assert "fixed_travel_minutes" in response.json()["detail"]
 
     def test_route_zero_selected_still_returns_both_parts(self, client: TestClient) -> None:
         upload_csv(client)

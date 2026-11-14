@@ -64,7 +64,10 @@ class TestEnvSolverTimeLimit:
         monkeypatch.delenv(hosted.ENV_MAX_STOPS, raising=False)
         upload_csv(client)
         body = route_body(client)
-        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label
+            for label in body["assumptions"]
+        )
         joined = "\n".join(body["assumptions"])
         assert f"solver_time_limit_s={services.demo_routing_config().solver_time_limit_s}" in joined
         assert "deployment setting" not in joined
@@ -82,7 +85,10 @@ class TestEnvSolverTimeLimit:
         with caplog.at_level(logging.WARNING, logger="src.api.hosted"):
             body = route_body(client)
         assert hosted.hosted_solver_time_limit_s() is None  # 500-free fallback
-        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label
+            for label in body["assumptions"]
+        )
         assert any(record.levelno == logging.WARNING for record in caplog.records)
         assert "not a float" in caplog.text or "positive float" in caplog.text
 
@@ -101,7 +107,10 @@ class TestEnvSolverTimeLimit:
         with caplog.at_level(logging.WARNING, logger="src.api.hosted"):
             body = route_body(client)
         assert hosted.hosted_solver_time_limit_s() is None  # 500-free fallback
-        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label
+            for label in body["assumptions"]
+        )
         assert "solver_time_limit_s=inf" not in "\n".join(body["assumptions"])
         assert any(
             record.levelno == logging.WARNING and "finite" in record.getMessage()
@@ -114,7 +123,10 @@ class TestEnvSolverTimeLimit:
         monkeypatch.setenv(hosted.ENV_SOLVER_TIME_LIMIT_S, "   ")
         upload_csv(client)
         body = route_body(client)
-        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label
+            for label in body["assumptions"]
+        )
 
 
 class TestEnvMaxStops:
@@ -177,7 +189,10 @@ class TestEnvMaxStops:
         assert not any(
             "hosted_demo_stop_cap" in item["reason"] for item in body["solution"]["unserved"]
         )
-        assert all("[demo assumption]" in label for label in body["assumptions"])
+        assert all(
+            "[demo assumption]" in label or "[representative]" in label
+            for label in body["assumptions"]
+        )
 
     @pytest.mark.parametrize("raw", ["abc", "-1", "0"])
     def test_invalid_value_no_cap_with_warning(
