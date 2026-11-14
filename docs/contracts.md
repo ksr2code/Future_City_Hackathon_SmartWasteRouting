@@ -311,14 +311,18 @@ prototype limitation, not a persistence claim.
 
 | method | path | purpose | body → response |
 |---|---|---|---|
-| GET | `/health` | liveness (M0) | — |
-| POST | `/datasets` | upload + validate CSV (§1) | multipart file → `DatasetSummary` + errors/warnings |
-| GET | `/summary` | active dataset summary | — → `DatasetSummary`; 404 if none |
-| GET | `/containers` | series with last reading | — → `list[SeriesStatus]`; 404 if none |
-| GET | `/config` | demo defaults + labels (§3.1, §4.6) | — → `ConfigDefaults` |
-| POST | `/forecasts` | run baselines (§2) | `ForecastRequest` → `ForecastResponse` |
-| POST | `/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
-| POST | `/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
+| GET | `/health` | liveness (M0, root; also `/api/health`) | — |
+| POST | `/api/datasets` | upload + validate CSV (§1) | multipart file → `DatasetSummary` + errors/warnings |
+| GET | `/api/summary` | active dataset summary | — → `DatasetSummary`; 404 if none |
+| GET | `/api/containers` | series with last reading | — → `list[SeriesStatus]`; 404 if none |
+| GET | `/api/config` | demo defaults + labels (§3.1, §4.6) | — → `ConfigDefaults` |
+| POST | `/api/forecasts` | run baselines (§2) | `ForecastRequest` → `ForecastResponse` |
+| POST | `/api/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
+| POST | `/api/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
+
+Routers mount under the **`/api` prefix**; the Vite dev proxy forwards `/api/*`
+to the backend port. `horizon_days` is optional, default **28**
+[demo assumption — observed median reading gap].
 
 ### 5.2 Shapes
 
@@ -327,14 +331,19 @@ DatasetSummary  = { n_rows, n_locations, n_series, date_min, date_max,
                     rows_per_material, n_errors, n_warnings, source_name }
 SeriesStatus    = { location_id, material_type, n_readings, last_date,
                     last_fill_pct | null, last_is_overfull }
-ForecastRequest = { as_of_date, horizon_days >= 1, method: "persistence"|"rate" }
+ForecastRequest = { as_of_date, horizon_days >= 1 (default 28 [demo assumption]), method: "persistence"|"rate" }
 ForecastResponse= { as_of_date, target_date, method, forecasts: [§2.2 records] }
 CandidateRequest= ForecastRequest + policy_config?: partial §3.1
 SelectionResponse = §3.3 SelectionResult (selected/skipped, reason_code+detail, config echo)
-RouteRequest    = ForecastRequest + policy_config? + routing_config?: partial §4.2/§4.6
-                  (container_volume_litres, densities, vehicle capacities/count,
-                   service minutes, max_shift_minutes, avg_speed_kmh,
-                   detour_factor, solver_time_limit_s)
+RouteRequest    = ForecastRequest + policy_config? + routing_config?
+routing_config (v1 applies to the single demo vehicle type; all optional):
+  { container_volume_litres, densities_kg_per_litre: {brown, green, white},
+    vehicle_volume_capacity_litres, vehicle_weight_capacity_kg,
+    vehicle_count_available, stop_service_minutes, disposal_service_minutes,
+    max_shift_minutes, avg_speed_kmh, detour_factor, solver_time_limit_s }
+ConfigDefaults  = { policy: §3.1 fields, routing: the routing_config defaults
+                    above (§4.6 values), assumption_fields: [names of every
+                    field that is a demo assumption] }
 RouteResponse   = { selection: SelectionResponse, solution: §4.3 RoutingSolution,
                     assumptions: [label strings] }
 ```
