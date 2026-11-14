@@ -300,9 +300,53 @@ echoes the effective config; M11 renders an editable panel that keeps the
 
 Host-supplied values replace defaults in config only — never silent.
 
-## 5. API (src/api) — TBD at M10
+## 5. API (src/api) — v1, agreed for M10
 
-Only `/health` exists (M0). Endpoints will wrap services defined by contracts 1–4;
-no business logic in handlers. Config defaults (§3.1, §4.6) are overridable per
-request; endpoints validate overrides, echo the effective config, and keep
-[demo assumption] labels visible (same for the M11 frontend panel).
+FastAPI + Pydantic; handlers thin, orchestration in `src/api/services.py`
+using modules from §1–§4 (no business logic in handlers). JSON snake_case.
+v1 keeps **one active dataset in memory** (upload replaces it) — documented
+prototype limitation, not a persistence claim.
+
+### 5.1 Endpoints
+
+| method | path | purpose | body → response |
+|---|---|---|---|
+| GET | `/health` | liveness (M0) | — |
+| POST | `/datasets` | upload + validate CSV (§1) | multipart file → `DatasetSummary` + errors/warnings |
+| GET | `/summary` | active dataset summary | — → `DatasetSummary`; 404 if none |
+| GET | `/containers` | series with last reading | — → `list[SeriesStatus]`; 404 if none |
+| GET | `/config` | demo defaults + labels (§3.1, §4.6) | — → `ConfigDefaults` |
+| POST | `/forecasts` | run baselines (§2) | `ForecastRequest` → `ForecastResponse` |
+| POST | `/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
+| POST | `/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
+
+### 5.2 Shapes
+
+```text
+DatasetSummary  = { n_rows, n_locations, n_series, date_min, date_max,
+                    rows_per_material, n_errors, n_warnings, source_name }
+SeriesStatus    = { location_id, material_type, n_readings, last_date,
+                    last_fill_pct | null, last_is_overfull }
+ForecastRequest = { as_of_date, horizon_days >= 1, method: "persistence"|"rate" }
+ForecastResponse= { as_of_date, target_date, method, forecasts: [§2.2 records] }
+CandidateRequest= ForecastRequest + policy_config?: partial §3.1
+SelectionResponse = §3.3 SelectionResult (selected/skipped, reason_code+detail, config echo)
+RouteRequest    = ForecastRequest + policy_config? + routing_config?: partial §4.2/§4.6
+                  (container_volume_litres, densities, vehicle capacities/count,
+                   service minutes, max_shift_minutes, avg_speed_kmh,
+                   detour_factor, solver_time_limit_s)
+RouteResponse   = { selection: SelectionResponse, solution: §4.3 RoutingSolution,
+                    assumptions: [label strings] }
+```
+
+### 5.3 Rules
+
+- Overrides validated by constructing `PolicyConfig`/`RoutingConfig`; invalid →
+  422 with the validation message; effective config echoed in every response.
+- No dataset loaded → 404; CSV with §1 errors → 422 + full error list, dataset
+  not replaced.
+- Synthetic geography and demo values stay labelled in responses
+  (`distance_provenance`, `demo_` ids, `assumptions` array) — the frontend
+  must render these labels.
+- `/route` always returns selection + solution, even for infeasible/timeout
+  status (unserved stops with reasons) — never a bare error.
