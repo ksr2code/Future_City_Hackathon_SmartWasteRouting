@@ -3,7 +3,10 @@
 Status legend: **[observed]** = verified in `data/raw/glass_fill_levels_anonymized_f.csv`
 (see `docs/data_profile.md` for the producing commands) · **[predicted]** = model/solver
 output · **[demo assumption]** = labelled synthetic value, not from data ·
-**[open question]** = unresolved semantics (docs/data_profile.md §13).
+**[representative]** = verbal information from the challenge representative
+(14 Nov 2026) — trusted as a default, absent from brief and data, always echoed
+with its source · **[open question]** = unresolved semantics
+(docs/data_profile.md §13, docs/open_questions.md).
 
 This file is the authority for cross-module interfaces. Specialists must read it
 before editing. Changes require architect review.
@@ -187,9 +190,11 @@ Clarifications agreed at M7 review (2026-11-14):
 ## 4. Route input/output (src/routing) — v1, agreed for M8/M9
 
 OR-Tools only (AGENTS rule 8). The brief (§3, audited 2026-11-14) names the
-variable categories but supplies **no values**: every numeric default below
-lives in a separate config module, labelled per value, and is **[demo
-assumption]** until the host supplies real ones.
+variable categories without values. On 14 Nov 2026 the challenge
+representative supplied verbal values for part of them — these are
+**[representative]** and are the defaults (§4.6). Everything else lives in
+the same separate config module, labelled per value, and stays **[demo
+assumption]** until the host supplies real ones (docs/open_questions.md).
 
 ### 4.1 Units (explicit, everywhere)
 
@@ -201,8 +206,9 @@ assumption]** until the host supplies real ones.
 | time | minutes (`int`) | service, travel, shift |
 | fill | percent (`float`) | from forecast (§2.2) |
 | coordinates | WGS84 lat/lon (`float`) | **none in data** — synthetic demo fixtures until host supplies |
-| speed | km/h (`float`) | [demo assumption] for derived travel times |
+| speed | km/h (`float`) | [demo assumption] for `haversine_derived` travel times only (§4.2) |
 | density | kg/litre (`float`) | per material; default 0.5 uniform **[demo assumption — user-agreed 2026-11-14]**, request-overridable (§4.6) |
+| cost | euros (`float`) | truck cost; parameters [representative] (§4.6), products [predicted] (derived, §4.3/§5.2.2) |
 
 ### 4.2 Input schemas (M8)
 
@@ -215,15 +221,33 @@ Stop = { location_id, material_type,           # key into §3 candidates
 Depot         = { id, name, lat, lon }          # central yard
 DisposalSite  = { id, name, lat, lon, service_minutes }   # unloading; ≥1
 VehicleType   = { id, name, volume_capacity_litres, weight_capacity_kg,
-                  count_available }
-RoutingConfig = { max_shift_minutes,            # [demo assumption] brief §3
+                  count_available,
+                  compartment_volume_litres: {material: int} | None }
+                  # one truck serves ALL materials, collected separated
+                  # [representative]; None ⇒ equal thirds of
+                  # volume_capacity_litres [demo assumption — layout unknown];
+                  # explicit values: each > 0 AND sum == volume_capacity_litres
+RoutingConfig = { max_shift_minutes,            # 480 = 8 h [representative]
                   densities_kg_per_litre: {material: float},   # defaults §4.6, request-overridable
-                  detour_factor, avg_speed_kmh, # [demo assumption] matrix derivation
+                  detour_factor, avg_speed_kmh, # [demo assumption]; used ONLY in
+                                                # haversine_derived mode (matrix derivation)
+                  travel_time_mode,             # "fixed_per_leg" (default) | "haversine_derived" [representative]
+                  fixed_travel_minutes,         # 10 [representative]; fixed_per_leg only;
+                                                # applies to EVERY leg incl. depot/disposal
+                                                # [interpretation — open question]
+                  cost_per_truck_day_eur,       # 500 [representative]
+                  operating_days_per_week,      # 5 [representative] (echo/display)
+                  operating_days_per_year,      # 200 [representative]
+                  geography_seed,               # int >= 0; 0 = current SHA-256 layout
+                                                # [demo assumption knob — decision ①]
+                  geography_spread_km,          # 6.0 = current 1–6 km band [demo assumption knob]
                   solver_solution_limit,        # int >= 1; primary stopping criterion (v2, §4.7)
                   solver_time_limit_s }         # safety cap only (v2, §4.7)
 TravelMatrix  = { point_ids: [depot+disposal+stop ids],
-                  distance_m: n×n int,
-                  duration_min: n×n int,        # distance/speed unless supplied
+                  distance_m: n×n int,          # haversine × detour in BOTH modes (never road)
+                  duration_min: n×n int,        # per travel_time_mode: fixed_per_leg ⇒
+                                                # fixed_travel_minutes on every leg;
+                                                # haversine_derived ⇒ distance/speed
                   provenance: "haversine_straight_line_derived" | "external" }
 RoutingProblem = { depot, disposal_sites, stops, vehicle_types, travel, config }
 ```
@@ -240,9 +264,16 @@ RoutingSolution = {
   routes: list[Route],
   unserved: list[{stop_key, reason}],           # never silently dropped
   totals: { distance_m, duration_min, collected_volume_litres,
+            collected_volume_by_material: {brown, green, white},  # litres; compartment visibility
             collected_weight_kg, stops_served, stops_total },
   fleet_recommendation: { vehicle_type_id, count,
                           basis: {ceil_by_volume, ceil_by_weight} },  # brief §4
+  travel_time_mode,                             # echoed effective mode
+  cost: { vehicles_used,                        # [predicted] derived (decision ③)
+          cost_eur_per_day,                     # = vehicles_used × cost_per_truck_day_eur
+          cost_eur_per_year,                    # = cost_eur_per_day × operating_days_per_year
+          fleet_cost: { trucks,                 # = fleet_recommendation.count
+                        cost_eur_per_day, cost_eur_per_year } },
   distance_provenance,                          # echoed from TravelMatrix
 }
 Route = { vehicle_type_id, sequence: list[Stop|DisposalSite|Depot>,
@@ -255,6 +286,16 @@ Route = { vehicle_type_id, sequence: list[Stop|DisposalSite|Depot>,
 - Every input stop appears in exactly one route **or** in `unserved` with a
   reason; counts reconcile (`stops_served + len(unserved) == stops_total`).
 - Volume and weight capacities hold at every load-progression point.
+- Per-material collected volume never exceeds its compartment capacity at any
+  point on a route (materials are never mixed on one truck
+  [representative]); a disposal visit resets every material dimension.
+- Cost figures are pure derivations from `vehicles_used` /
+  `fleet_recommendation.count` × the §4.6 cost parameters — labelled
+  [predicted]/derived, never presented as invoiced amounts.
+- Fleet recommendation basis stays total volume/weight (brief §4); a
+  compartment-bound route (all compartments full while total capacity
+  remains) is a surfaced, documented limitation via
+  `collected_volume_by_material`, not a silent drop.
 - Route duration ≤ `max_shift_minutes` or the violation is reported, not hidden.
 - Fleet recommendation = max(⌈volume/capacity⌉, ⌈weight/capacity⌉) per vehicle
   type [protocol choice v1; document in model card].
@@ -286,10 +327,12 @@ Protocol choices agreed 2026-11-14 (v2 determinism, user-approved):
 
 ### 4.7 Comparison baselines (M12 v2, user-approved 2026-11-14)
 
-Gain-decomposition scenarios, all sharing the §4.6 demo physics, the §3
+Gain-decomposition scenarios, all sharing the §4.6 physics — including
+`travel_time_mode` and compartment capacities — the §3
 selection policy (where applied) and the naive simulation semantics of
 `src/routing/naive.py` (capacities, nearest-disposal unload, shift rules,
-fleet exhaustion, per-stop unserved reasons):
+fleet exhaustion, per-stop unserved reasons). Distance metrics stay
+haversine-derived in every mode; durations follow the effective mode:
 
 | scenario id | stops visited | order | isolates |
 |---|---|---|---|
@@ -316,33 +359,47 @@ fleet exhaustion, per-stop unserved reasons):
   for continuity but is **not** part of the API scenarios array; it remains
   a docs/tests baseline only.
 
-### 4.5 Inputs still missing (ask host on site)
+### 4.5 Inputs still missing (ask host)
 
-Real coordinates (449 locations), depot + disposal sites, fleet specs,
-container volumes, densities, service times, shift rules, road matrix or
-speeds. Until then the demo runs fully labelled synthetic values.
+Tracked in `docs/open_questions.md`: real coordinates (449 locations), depot +
+disposal sites, truck capacity, waste densities, compartment layout, road
+matrix, disposal service time. Values already supplied verbally by the
+representative (14 Nov 2026) are [representative]; everything else stays
+labelled synthetic/demo until answered.
 
-### 4.6 Agreed demo defaults (user decision 2026-11-14) — all [demo assumption]
+### 4.6 Agreed defaults (v3, 2026-11-14 — representative values + demo assumptions)
 
 Live in one labelled config module (`src/routing/demo_config.py`, M8); every
 value overridable **per request** (M10 API validates ranges per §3.1/§4.2 and
 echoes the effective config; M11 renders an editable panel that keeps the
-[demo assumption] labels visible — overrides never relabel facts).
+source labels visible — overrides never relabel facts).
 
-| value | default | note |
+| value | default | source |
 |---|---|---|
-| `container_volume_litres` | 1900 | typical glass igloo size |
-| `densities_kg_per_litre` | 0.5 uniform (brown/green/white) | conservative loose-cullet demo value |
-| vehicle type | `demo_truck`: 12,000 L / 10,000 kg, 3 available | one type in v1 |
-| `service_minutes` (stop) | 10 | |
-| disposal `service_minutes` | 30 | |
-| `max_shift_minutes` | 480 | 8 h demo cap |
-| `avg_speed_kmh` | 30 | urban demo speed |
-| `detour_factor` | 1.4 | haversine→approx road factor; provenance stays "straight-line derived" |
-| `solver_solution_limit` | 200 | v2 primary stopping criterion (deterministic; §4.7) |
-| `solver_time_limit_s` | 30.0 | safety cap only (v2): fires ⇒ status `timeout`, run not reproducible |
+| `container_volume_litres` | 3000 (3 m³ per container) | [representative] |
+| `densities_kg_per_litre` | 0.5 uniform (brown/green/white) | [demo assumption] |
+| vehicle type | `demo_truck`: 12,000 L / 10,000 kg, 3 available | [demo assumption] |
+| `compartment_volume_litres` | equal thirds: 4,000 L per material | [demo assumption — layout unknown] |
+| `service_minutes` (stop) | 5 per container | [representative] (per location? open question) |
+| disposal `service_minutes` | 30 | [demo assumption] |
+| `max_shift_minutes` | 480 (8 h) | [representative] |
+| `travel_time_mode` | `fixed_per_leg` | [representative] reading of "10 min between containers" |
+| `fixed_travel_minutes` | 10, every leg incl. depot/disposal | [representative] + [interpretation] |
+| `avg_speed_kmh` | 30 | [demo assumption] (`haversine_derived` mode only) |
+| `detour_factor` | 1.4 | [demo assumption]; provenance stays "straight-line derived" |
+| `cost_per_truck_day_eur` | 500 | [representative] |
+| `operating_days_per_week` | 5 | [representative] (echo) |
+| `operating_days_per_year` | 200 | [representative] |
+| `geography_seed` | 0 (= current SHA-256 layout) | [demo assumption knob — decision ①] |
+| `geography_spread_km` | 6.0 (= current 1–6 km band) | [demo assumption knob — decision ①] |
+| `solver_solution_limit` | 200 | [demo assumption] (deterministic; §4.7) |
+| `solver_time_limit_s` | 30.0 | [demo assumption] safety cap only (§4.7) |
 
-Host-supplied values replace defaults in config only — never silent.
+Geography knobs parameterise the **synthetic** layout for sensitivity
+analysis only (user decision ①, 2026-11-14); defaults MUST reproduce the
+existing coordinates exactly (regression-tested). Real relative bin
+locations remain an open question. Host-supplied values replace defaults in
+config only — never silent.
 
 ## 5. API (src/api) — v1, agreed for M10
 
@@ -364,6 +421,7 @@ prototype limitation, not a persistence claim.
 | POST | `/api/candidates` | selection policy (§3) | `CandidateRequest` → `SelectionResponse` |
 | POST | `/api/route` | pipeline: forecast → policy → geography → solve (§4) | `RouteRequest` → `RouteResponse` |
 | GET | `/api/comparison` | scenario comparison with gain decomposition (§4.7, M12) | — → `ComparisonResponse`; 404 if no dataset |
+| GET | `/api/days-to-full` | days-to-full per series from fill history (§5.2.3) | — → `DaysToFullResponse`; 404 if no dataset |
 | POST | `/api/datasets/demo` | load server-side demo CSV (path fixed server-side, never client-supplied) | — → `DatasetUploadResponse`; 404 if file absent; 422 on §1 errors (same rules as upload) |
 
 Routers mount under the **`/api` prefix**; the Vite dev proxy forwards `/api/*`
@@ -382,15 +440,22 @@ ForecastResponse= { as_of_date, target_date, method, forecasts: [§2.2 records] 
 CandidateRequest= ForecastRequest + policy_config?: partial §3.1
 SelectionResponse = §3.3 SelectionResult (selected/skipped, reason_code+detail, config echo)
 RouteRequest    = ForecastRequest + policy_config? + routing_config?
-routing_config (v1 applies to the single demo vehicle type; all optional):
+routing_config (v3 applies to the single demo vehicle type; all optional):
   { container_volume_litres, densities_kg_per_litre: {brown, green, white},
     vehicle_volume_capacity_litres, vehicle_weight_capacity_kg,
-    vehicle_count_available, stop_service_minutes, disposal_service_minutes,
-    max_shift_minutes, avg_speed_kmh, detour_factor, solver_solution_limit,
+    vehicle_count_available,
+    vehicle_compartment_volume_litres: {brown, green, white}?,  # §4.2 rules; absent ⇒ equal thirds
+    stop_service_minutes, disposal_service_minutes,
+    max_shift_minutes, travel_time_mode, fixed_travel_minutes,
+    cost_per_truck_day_eur, operating_days_per_week, operating_days_per_year,
+    geography_seed, geography_spread_km,
+    avg_speed_kmh, detour_factor, solver_solution_limit,
     solver_time_limit_s }
 ConfigDefaults  = { policy: §3.1 fields, routing: the routing_config defaults
                     above (§4.6 values), assumption_fields: [names of every
-                    field that is a demo assumption] }
+                    field that is a demo assumption],
+                    sources: {field name → "representative" | "demo assumption"} }
+                    # v3: per-field source labels for the UI assumptions panel
 RouteResponse   = { selection: SelectionResponse, solution: §4.3 RoutingSolution,
                     assumptions: [label strings] }
 ```
@@ -432,7 +497,10 @@ ComparisonScenario = { method: "naive_sweep_all" | "naive_sweep_selected" | "ort
                        unserved_count, recommended_trucks,
                        fleet_basis: {ceil_by_volume, ceil_by_weight},
                        distance_per_stop_m | null,        # distance_m / stops_served, 1 d.p.
-                       distance_per_kg_m | null }         # distance_m / collected_weight_kg, 1 d.p.
+                       distance_per_kg_m | null,          # distance_m / collected_weight_kg, 1 d.p.
+                       travel_time_mode,                  # echoed (§4.6)
+                       cost_eur_per_day,                  # [predicted] vehicles_used × cost_per_truck_day_eur
+                       cost_eur_per_year }                # [predicted] cost_eur_per_day × operating_days_per_year
 ComparisonResponse = { as_of_date, target_date, horizon_days,   # fixed CLI defaults, echoed
                        method: "persistence",
                        scenarios: [ComparisonScenario],         # §4.7 ids, fixed order
@@ -443,6 +511,10 @@ ComparisonResponse = { as_of_date, target_date, horizon_days,   # fixed CLI defa
                                                 mode: "identical" | "median_of_runs",
                                                 distance_m_median, distance_m_min,
                                                 distance_m_max },
+                       fleet_budget: { vehicle_type_id, trucks,  # ortools-scenario fleet_recommendation
+                                       cost_eur_per_day,         # trucks × cost_per_truck_day_eur
+                                       cost_eur_per_year },      # × operating_days_per_year
+                                                                 # [predicted] derived (decision ③)
                        distance_provenance, assumptions: [labels] }
 ```
 
@@ -468,6 +540,33 @@ ComparisonResponse = { as_of_date, target_date, horizon_days,   # fixed CLI defa
   path; the response labels `source_name` with a `demo:` prefix so the UI can
   show it as demo data.
 
+### 5.2.3 Days-to-full (v3, user-approved 2026-11-14)
+
+```text
+DaysToFullResponse = {
+  method: "median_positive_pair_rate",          # [predicted] from fill history only
+  stats: { series_total, series_with_estimate,
+           median_days | null, mean_days | null, min_days | null, max_days | null },
+  series: [ { location_id, material_type, last_date,
+              last_fill_pct | null, last_is_overfull,
+              rate_pct_per_day | null,          # median positive consecutive-pair rate
+              days_to_full | null,              # max(0, (100 − last numeric fill)/rate), 1 d.p.
+              reason | null } ],                # null iff days_to_full present
+  assumptions: [labels] }
+```
+
+- Rate per series = median over **consecutive numeric reading pairs with a
+  positive delta** of `Δfill_pct / Δdays` (drops are probable emptyings
+  [observed: no collection events in the data] and are excluded, never
+  treated as negative accumulation).
+- `days_to_full = max(0, (100 − last numeric fill) / rate)`.
+- No-data cases are never fabricated: `no_numeric_history` (< 2 numeric
+  readings), `no_positive_rate` (no increasing pair), `already_full`
+  (last reading numeric 100 or `overfull` → `days_to_full = 0.0`).
+- Caveats echoed in `assumptions`: median reading gap 28 d [observed]; the
+  estimate assumes a constant fill rate and no emptying between readings.
+- Aggregate stats cover only series with an estimate; nulls when none exist.
+
 ### 5.3 Rules
 
 - Overrides validated by constructing `PolicyConfig`/`RoutingConfig`; invalid →
@@ -477,5 +576,7 @@ ComparisonResponse = { as_of_date, target_date, horizon_days,   # fixed CLI defa
 - Synthetic geography and demo values stay labelled in responses
   (`distance_provenance`, `demo_` ids, `assumptions` array) — the frontend
   must render these labels.
+- [representative] values carry their source in `sources`/config echoes —
+  never silently mixed with [demo assumption] fields in the UI.
 - `/route` always returns selection + solution, even for infeasible/timeout
   status (unserved stops with reasons) — never a bare error.
