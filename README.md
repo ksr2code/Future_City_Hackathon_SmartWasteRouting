@@ -57,10 +57,28 @@ cd frontend && npm run build   # tsc --noEmit + Vite production build
 cd frontend && npm test        # Vitest suite
 ```
 
+## Demo
+
+Start the backend and frontend as below, open http://localhost:5173 (the Vite
+dev server answers on `localhost`, not `127.0.0.1`), and press **Load demo
+data** on the Overview page — or upload
+`data/raw/glass_fill_levels_anonymized_f.csv`. A guided walkthrough is in
+`docs/demo_script.md`; the full guide (screens, architecture, limitations):
+`docs/user_guide.md`. No API keys are required.
+
 ## Configuration
 
 Copy `.env.example` to `.env` for app settings (host, port, log level). No API
 keys are required for the core demo.
+
+## Documentation
+
+- `docs/user_guide.md` — user guide (deliverable 4): setup/run/test/demo, screens, architecture, limitations
+- `docs/routing_methodology.md` — distance provenance, solver setup, fleet sizing, comparison design
+- `docs/data_profile.md` — data dictionary / source audit
+- `docs/contracts.md` — cross-module contracts (wire format authority)
+- `docs/demo_numbers.md` — reproducible comparison numbers
+- `docs/model_card.md` — forecast model card
 
 ## Data
 
