@@ -3,13 +3,14 @@
 Runs both scenarios on the challenge dataset with the agreed §4.6 demo
 pipeline and writes ``docs/demo_numbers.md``:
 
-    python -m src.routing.compare_demo
+    python -m src.api.compare_demo
 
-Optimised scenario: the M10 ``run_route`` pipeline reused **exactly**
-(``src.api.services``) — persistence forecast (§2.3), as_of 2026-09-30,
-horizon_days 28 [demo assumption], default ``PolicyConfig`` (§3.1), synthetic
-demo geography (§4.5) and §4.6 demo config, solved by
-``src.routing.solver.solve``.
+Lives in the API layer (AGENTS boundaries): it orchestrates domain modules —
+the M10 ``run_route`` pipeline reused **exactly** (``src.api.services``:
+persistence forecast §2.3, as_of 2026-09-30, horizon_days 28 [demo
+assumption], default ``PolicyConfig`` §3.1, synthetic demo geography §4.5 and
+§4.6 demo config, solved by ``src.routing.solver.solve``) plus the naive
+scenario from ``src.routing.naive``.
 
 Naive scenario: the **same demo inputs** (same depot/disposal/vehicle/config
 values, same synthetic-coordinate derivation) but over **ALL** dataset series
@@ -237,6 +238,7 @@ def _scenario_table(
     fleet_recommendation: api_schemas.FleetRecommendationResponse,
 ) -> list[str]:
     """The shared §4.3-key metric rows for one scenario table."""
+    vehicle = demo_vehicle_type()  # id/count from the §4.6 config, never literals
     return [
         "| metric | value |",
         "|---|---|",
@@ -244,7 +246,7 @@ def _scenario_table(
         f"| total distance_m | {distance_m} (haversine_straight_line_derived) |",
         f"| total duration_min | {duration_min} |",
         f"| stops visited | {stops_served} / {stops_total} |",
-        f"| vehicles available | {DEMO_VEHICLE_COUNT_AVAILABLE} x demo_truck "
+        f"| vehicles available | {DEMO_VEHICLE_COUNT_AVAILABLE} x {vehicle.id} "
         "[demo assumption §4.6] |",
         f"| vehicles used | {vehicles_used} |",
         f"| collected volume litres | {collected_volume_litres} |",
@@ -277,7 +279,7 @@ def _render_markdown(
     add("# Demo numbers — naive fixed-order vs optimised (M12)")
     add("")
     add(
-        f"Reproducing command: `python -m src.routing.compare_demo` (writes `{output_path}`; "
+        f"Reproducing command: `python -m src.api.compare_demo` (writes `{output_path}`; "
         "optional overrides `--data PATH --output PATH --as-of YYYY-MM-DD --horizon N`)"
     )
     add("")
@@ -404,7 +406,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_comparison(
             arguments.data, arguments.output, as_of=as_of, horizon_days=arguments.horizon
         )
-    except (OSError, CompareDemoError) as error:
+    except (OSError, ValueError, CompareDemoError) as error:
+        # ValueError covers a malformed --as-of (strptime) and any downstream
+        # validation error — reported cleanly on stderr, never a traceback.
         print(f"compare_demo failed: {error}", file=sys.stderr)
         return 2
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

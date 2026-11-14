@@ -1,6 +1,6 @@
 # Demo numbers — naive fixed-order vs optimised (M12)
 
-Reproducing command: `python -m src.routing.compare_demo` (writes `docs/demo_numbers.md`; optional overrides `--data PATH --output PATH --as-of YYYY-MM-DD --horizon N`)
+Reproducing command: `python -m src.api.compare_demo` (writes `docs/demo_numbers.md`; optional overrides `--data PATH --output PATH --as-of YYYY-MM-DD --horizon N`)
 
 Dataset: `data/raw/glass_fill_levels_anonymized_f.csv` [observed] — 11701 rows, 449 locations, 1338 series, 2025-10-17..2026-09-30. Raw file immutable (AGENTS rule 4).
 
@@ -34,8 +34,8 @@ Shift overruns reported (contract §4.4): 0
 | metric | value |
 |---|---|
 | status | feasible |
-| total distance_m | 69889 (haversine_straight_line_derived) |
-| total duration_min | 601 |
+| total distance_m | 69521 (haversine_straight_line_derived) |
+| total duration_min | 602 |
 | stops visited | 43 / 458 |
 | vehicles available | 3 x demo_truck [demo assumption §4.6] |
 | vehicles used | 3 |

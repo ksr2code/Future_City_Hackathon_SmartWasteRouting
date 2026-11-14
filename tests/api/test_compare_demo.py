@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from src.routing.compare_demo import ComparisonResult, main, run_comparison
+from src.api.compare_demo import ComparisonResult, main, run_comparison
 
 AS_OF = date(2026, 9, 30)
 
@@ -117,7 +117,7 @@ def test_document_labels_and_structure(comparison: ComparisonResult) -> None:
     assert 'never "road distance"' in markdown  # AGENTS rule 9 / contract §4.2
     assert "[demo assumption]" in markdown
     assert "detour factor" in markdown
-    assert "python -m src.routing.compare_demo" in markdown
+    assert "python -m src.api.compare_demo" in markdown
     assert "run-to-run" in markdown  # GLS wall-clock note
     assert "0 L / 0 kg" in markdown  # zero-fill labelling
 
@@ -169,3 +169,16 @@ def test_main_exit_zero_writes_document(
     assert exit_code == 0
     assert output_path.exists()
     assert "Scenario A" in output_path.read_text(encoding="utf-8")
+
+
+def test_main_malformed_as_of_exits_two(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    csv_path = tmp_path_factory.mktemp("cli-bad") / "synthetic_compare.csv"
+    csv_path.write_text(CSV_ROWS, encoding="utf-8")
+    output_path = csv_path.parent / "demo_numbers.md"
+    exit_code = main(
+        ["--data", str(csv_path), "--output", str(output_path), "--as-of", "30-09-2026"]
+    )
+    assert exit_code == 2
+    assert not output_path.exists()  # clean failure, no traceback, no partial doc
