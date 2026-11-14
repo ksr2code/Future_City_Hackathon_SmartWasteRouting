@@ -175,6 +175,23 @@ class TestDemoDataset:
         assert summary.json()["n_rows"] == 2  # active dataset untouched
         assert summary.json()["source_name"] == "small.csv"
 
+    def test_demo_absent_file_404_friendly_operator_message(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Deployment brief task 3 §3: absent demo CSV -> a friendly 404 that
+        tells the operator what to do instead (never a crash)."""
+        upload_csv(client, content=SMALL_CSV, name="small.csv")
+        missing = tmp_path / "missing" / "demo.csv"
+        monkeypatch.setattr(services, "DEMO_CSV_PATH", missing)
+        response = client.post("/api/datasets/demo")
+        assert response.status_code == 404
+        detail = response.json()["detail"]
+        assert "not available in this deployment" in detail
+        assert "POST /api/datasets" in detail  # actionable alternative
+        assert str(missing) in detail  # which path is missing
+        summary = client.get("/api/summary")
+        assert summary.json()["n_rows"] == 2  # active dataset untouched
+
     def test_demo_invalid_csv_422_full_error_list_and_dataset_unchanged(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

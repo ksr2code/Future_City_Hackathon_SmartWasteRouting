@@ -39,6 +39,59 @@ pip install -e ".[dev]"
 .venv/bin/uvicorn src.api.main:app --reload   # API on http://127.0.0.1:8000
 ```
 
+## Run with Docker
+
+One multi-stage image serves the FastAPI API and the built React SPA from a
+single process (`src/api/spa.py` mounts `frontend/dist` at `/` with an SPA
+fallback). No data is baked into the image.
+
+```bash
+docker build -t wasterouting .
+docker run -p 8000:8000 wasterouting        # http://localhost:8000
+
+# Optional (private CSV stays on your machine): enable the demo endpoint by
+# mounting the challenge CSV read-only — it is never committed or copied:
+docker run -p 8000:8000 -v "$PWD/data/raw:/app/data/raw:ro" wasterouting
+```
+
+Without the mount, `POST /api/datasets/demo` answers a friendly 404 and the
+UI still works with uploaded CSVs.
+
+### Deployment knobs (hosted environments, optional)
+
+| Env var | Effect | Default |
+|---|---|---|
+| `WASTECITY_SOLVER_TIME_LIMIT_S` | Positive float; replaces the default `solver_time_limit_s` (§4.6) for requests that do **not** override it. An explicit request override always wins. | unset → §4.6 default |
+| `WASTECITY_MAX_STOPS` | Positive int; only the first N policy-selected candidates (§3.3 order) are handed to the solver; the rest appear in `unserved` with reason `hosted_demo_stop_cap` — never silently dropped. | unset → no cap |
+
+Invalid values are ignored with a warning log (the service never crashes on
+them); unset variables leave behaviour byte-identical to local defaults.
+These are **deployment knobs of this prototype, not new assumptions about
+the challenge** — responses label them `[deployment setting]`.
+
+Example (free-tier-sized demo run):
+
+```bash
+docker run -p 8000:8000 -e WASTECITY_MAX_STOPS=50 -e WASTECITY_SOLVER_TIME_LIMIT_S=10 -v "$PWD/data/raw:/app/data/raw:ro" wasterouting
+```
+
+## Deploy
+
+Both platforms run the image as a Docker web service; `PORT` is provided by
+the platform and read by the container command.
+
+- **Render (primary)**: create a Web Service with Docker runtime. Free-tier
+  characteristics: ~1 min cold start after inactivity, **ephemeral disk**
+  (uploaded datasets and demo data vanish on restart; the in-memory active
+  dataset resets — re-upload or reload demo data), 512 MB RAM. Set the
+  optional env knobs above (e.g. `WASTECITY_MAX_STOPS=50`) if needed.
+- **Hugging Face Spaces (fallback)**: create a Docker Space from the same
+  image/Repo; the same ephemeral-disk and cold-start notes apply; provide
+  the port via the platform's `$PORT` convention.
+
+Distances in the demo are haversine straight-line derived (synthetic
+coordinates, labelled in every response) — never presented as road distance.
+
 ## Frontend setup & run
 
 ```bash

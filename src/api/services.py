@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from src.api import schemas
+from src.api import hosted, schemas
 from src.api.errors import DemoDatasetMissingError
 from src.api.state import store
 from src.collection.policy import (
@@ -220,7 +220,11 @@ def load_demo_dataset() -> LoadResult:
     """
     if not DEMO_CSV_PATH.is_file():
         raise DemoDatasetMissingError(
-            f"demo dataset not available on the server: {DEMO_CSV_PATH} does not exist"
+            "Demo dataset is not available in this deployment: "
+            f"{DEMO_CSV_PATH} does not exist. Upload a CSV with the same "
+            "columns via POST /api/datasets, or mount the challenge CSV "
+            "read-only at that path (see README 'Run with Docker') to "
+            "enable the demo endpoint."
         )
     return upload_dataset(DEMO_CSV_PATH.read_bytes(), f"demo:{DEMO_CSV_PATH.name}")
 
@@ -448,6 +452,14 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
     Invalid overrides raise the domain errors (PolicyConfigError/
     RoutingSchemaError) before any solving; ``main`` maps them to 422 with
     the validation message.
+
+    Deployment knob ``WASTECITY_MAX_STOPS`` (``src.api.hosted``) caps how
+    many policy-selected candidates are handed to the solver: the first N in
+    the §3.3 selection order (``selection.selected`` is already sorted that
+    way). The remainder surfaces in ``solution.unserved`` with an explicit
+    ``hosted_demo_stop_cap`` reason — never silently dropped (AGENTS rule 9)
+    — and ``totals.stops_total`` still counts every policy-selected stop, so
+    ``stops_served + len(unserved) == stops_total`` holds. Unset → no cap.
     """
     policy_config = _effective_policy_config(request.policy_config)
     routing = _effective_routing(request.routing_config)
@@ -464,10 +476,19 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
         config=policy_config,
     )
 
+    # Hosted stop cap (deployment knob): deterministically keep the first N
+    # of the policy-ordered selected candidates for the solver.
+    cap = hosted.hosted_max_stops()
+    solver_candidates = list(selection.selected)
+    capped_out: list[Candidate] = []
+    if cap is not None and cap < len(solver_candidates):
+        capped_out = solver_candidates[cap:]
+        solver_candidates = solver_candidates[:cap]
+
     depot = demo_depot()
     disposal = routing.disposal
     coordinates = synthetic_stop_coordinates(
-        ((c.location_id, c.material_type) for c in selection.selected),
+        ((c.location_id, c.material_type) for c in solver_candidates),
         depot,
     )
     stops = [
@@ -480,11 +501,11 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
             predicted_fill_pct=candidate.predicted_fill_pct,
             service_minutes=routing.stop_service_minutes,
         )
-        for candidate in selection.selected
+        for candidate in solver_candidates
     ]
     travel = build_travel_matrix(depot, [disposal], stops, routing.config)
     problem = build_routing_problem(
-        selection.selected,
+        solver_candidates,
         depot,
         [disposal],
         [routing.vehicle],
@@ -496,10 +517,56 @@ def run_route(request: schemas.RouteRequest) -> schemas.RouteResponse:
     )
     solution = solve(problem)
 
+    solution_response = _solution_response(solution, disposal, depot)
+    if capped_out:
+        solution_response = _apply_hosted_stop_cap(
+            solution_response, selection.selected, capped_out, cap
+        )
+
     return schemas.RouteResponse(
         selection=_selection_response(selection),
-        solution=_solution_response(solution, disposal, depot),
-        assumptions=_assumption_labels(request, routing),
+        solution=solution_response,
+        assumptions=_assumption_labels(
+            request, routing, cap, len(selection.selected), len(capped_out)
+        ),
+    )
+
+
+def _apply_hosted_stop_cap(
+    solution: schemas.RoutingSolutionResponse,
+    selected: Sequence[Candidate],
+    capped_out: Sequence[Candidate],
+    cap: int | None,
+) -> schemas.RoutingSolutionResponse:
+    """Surface the deployment stop cap in the response (never silently
+    dropped, AGENTS rule 9): capped-out stops join ``unserved`` with an
+    explicit ``hosted_demo_stop_cap`` reason and ``stops_total`` counts every
+    policy-selected stop, keeping the reconcile invariant
+    ``stops_served + len(unserved) == stops_total``. Merged list sorted for a
+    deterministic presentation."""
+    capped_unserved = [
+        schemas.UnservedStopResponse(
+            location_id=candidate.location_id,
+            material_type=candidate.material_type,
+            reason=(
+                f"hosted_demo_stop_cap: deployment setting "
+                f"WASTECITY_MAX_STOPS={cap} handed only the first {cap} of "
+                f"{len(selected)} policy-selected stops to the solver; the "
+                "policy selection itself is unchanged and shown in "
+                "`selection`"
+            ),
+        )
+        for candidate in capped_out
+    ]
+    merged = sorted(
+        [*solution.unserved, *capped_unserved],
+        key=lambda item: (item.location_id, item.material_type),
+    )
+    return solution.model_copy(
+        update={
+            "unserved": merged,
+            "totals": solution.totals.model_copy(update={"stops_total": len(selected)}),
+        }
     )
 
 
@@ -512,6 +579,9 @@ class _EffectiveRouting:
     disposal: DisposalSite
     container_volume_litres: int
     stop_service_minutes: int
+    solver_time_limit_from_env: bool = False
+    """True when ``WASTECITY_SOLVER_TIME_LIMIT_S`` supplied the effective
+    time limit (the request did not override it); drives the response label."""
 
 
 def _effective_routing(
@@ -524,18 +594,45 @@ def _effective_routing(
     The Pydantic override model already coerced each field to its declared
     type at the boundary (``int | None``/``float | None``/``dict[MaterialType,
     float] | None``), so only typed values reach the constructors here.
+
+    Deployment knob ``WASTECITY_SOLVER_TIME_LIMIT_S`` (``src.api.hosted``)
+    supplies the default ``solver_time_limit_s`` when the request does not
+    override it; unset/invalid → the §4.6 default (byte-identical behaviour).
     """
     base_config = demo_routing_config()
     base_vehicle = demo_vehicle_type()
     base_disposal = demo_disposal_site()
+    env_time_limit = hosted.hosted_solver_time_limit_s()
+
+    def _effective_time_limit(override: float | None) -> tuple[float, bool]:
+        """Effective solver_time_limit_s: request override wins, then the
+        deployment env knob, then the §4.6 default; bool = from-env."""
+        if override is not None:
+            return override, False
+        if env_time_limit is not None:
+            return env_time_limit, True
+        return base_config.solver_time_limit_s, False
+
     if overrides is None:
+        time_limit_s, from_env = _effective_time_limit(None)
+        if from_env:
+            base_config = RoutingConfig(
+                max_shift_minutes=base_config.max_shift_minutes,
+                densities_kg_per_litre=dict(base_config.densities_kg_per_litre),
+                detour_factor=base_config.detour_factor,
+                avg_speed_kmh=base_config.avg_speed_kmh,
+                solver_solution_limit=base_config.solver_solution_limit,
+                solver_time_limit_s=time_limit_s,
+            )
         return _EffectiveRouting(
             config=base_config,
             vehicle=base_vehicle,
             disposal=base_disposal,
             container_volume_litres=DEMO_CONTAINER_VOLUME_LITRES,
             stop_service_minutes=DEMO_STOP_SERVICE_MINUTES,
+            solver_time_limit_from_env=from_env,
         )
+    time_limit_s, from_env = _effective_time_limit(overrides.solver_time_limit_s)
     config = RoutingConfig(
         max_shift_minutes=(
             overrides.max_shift_minutes
@@ -562,11 +659,7 @@ def _effective_routing(
             if overrides.solver_solution_limit is not None
             else base_config.solver_solution_limit
         ),
-        solver_time_limit_s=(
-            overrides.solver_time_limit_s
-            if overrides.solver_time_limit_s is not None
-            else base_config.solver_time_limit_s
-        ),
+        solver_time_limit_s=time_limit_s,
     )
     vehicle = VehicleType(
         id=base_vehicle.id,
@@ -612,6 +705,7 @@ def _effective_routing(
             if overrides.stop_service_minutes is not None
             else DEMO_STOP_SERVICE_MINUTES
         ),
+        solver_time_limit_from_env=from_env,
     )
 
 
@@ -706,10 +800,20 @@ def _route_item(
 def _assumption_labels(
     request: schemas.RouteRequest,
     routing: _EffectiveRouting,
+    cap: int | None,
+    n_selected: int,
+    n_capped_out: int,
 ) -> list[str]:
-    """Labelled assumption strings for the §5.2 RouteResponse (§5.3)."""
+    """Labelled assumption strings for the §5.2 RouteResponse (§5.3).
+
+    Deployment knobs (``src.api.hosted``) get explicit "[deployment setting]"
+    labels — they are not demo assumptions about the challenge. The stop-cap
+    label appears only when the cap actually reduced the solver hand-off
+    (``n_capped_out > 0``); with both env vars unset the label list is
+    unchanged from the pre-knob contract.
+    """
     config = routing.config
-    return [
+    labels = [
         f"{ASSUMPTION_LABEL} forecast horizon_days={request.horizon_days} "
         "(brief defines no horizon; default is the observed median reading gap)",
         f"{ASSUMPTION_LABEL} synthetic stop coordinates derived from SHA-256 of "
@@ -734,9 +838,28 @@ def _assumption_labels(
         f"detour_factor={config.detour_factor} (matrix derivation)",
         f"{ASSUMPTION_LABEL} solver_solution_limit={config.solver_solution_limit} "
         "(primary stopping criterion, deterministic; §4.7)",
-        f"{ASSUMPTION_LABEL} solver_time_limit_s={config.solver_time_limit_s} "
-        "(safety cap only; fires ⇒ status timeout, run not reproducible; §4.7)",
     ]
+    if routing.solver_time_limit_from_env:
+        labels.append(
+            "[deployment setting] solver_time_limit_s="
+            f"{config.solver_time_limit_s} via WASTECITY_SOLVER_TIME_LIMIT_S "
+            "(hosted deployment knob; an explicit request override still "
+            "wins; not a demo assumption about the challenge)"
+        )
+    else:
+        labels.append(
+            f"{ASSUMPTION_LABEL} solver_time_limit_s={config.solver_time_limit_s} "
+            "(safety cap only; fires ⇒ status timeout, run not reproducible; §4.7)"
+        )
+    if n_capped_out > 0:
+        labels.append(
+            "[deployment setting] WASTECITY_MAX_STOPS: solver received the "
+            f"first {n_selected - n_capped_out} of {n_selected} "
+            "policy-selected stops (§3.3 order preserved); the remainder is "
+            "listed in `unserved` with reason hosted_demo_stop_cap; "
+            "deployment knob, not a demo assumption about the challenge"
+        )
+    return labels
 
 
 # --- Comparison (§5.1 GET /api/comparison; §5.2.2; shared with the M12 CLI) --
