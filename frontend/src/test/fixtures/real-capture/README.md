@@ -38,16 +38,11 @@ after loading the demo dataset (`POST /api/datasets/demo`; the same
   unserved entries (`{location_id, material_type, reason}` — no `stop_key`),
   `load_progression` as `[volume_litres, weight_kg]` tuple arrays, and the
   explicit `node_type` discriminator (`stop` nodes carry `point_id`).
-- `comparison.json` — `GET /api/comparison` 200 (as_of `2026-09-30`;
-  **regenerated 2026-11-14 for v3**, contracts §4.7/§5.2.2): `scenarios[]` in
-  the fixed §4.7 order (`naive_sweep_all` 454,623 m / 50 served / 10.1 m/kg;
-  `naive_sweep_selected` 527,021 m / 38 / 10.6 m/kg; `ortools` median
-  70,175 m / 34 / 3.1 m/kg), `gains` selection −72,398 / routing +456,846 /
-  total +384,448, `optimised_determinism` `{runs: 5, mode: "identical"}`,
-  v3 per-scenario `travel_time_mode` + cost fields (1,500 EUR/day /
-  300,000 EUR/year each) and the `fleet_budget` block (`demo_truck` ×99 →
-  49,500 EUR/day / 9,900,000 EUR/year). Distances are
-  `haversine_straight_line_derived` — never road distance.
+- `v4/comparison.json` — `GET /api/comparison` 200 (as_of `2026-09-30`;
+  contracts §4.7/§5.2.2, **4-scenario v4 order** with `naive_fixed_frequency`
+  FIRST; see `v4/README.md`). The earlier v3-era root `comparison.json`
+  (3-scenario order, no status-quo row) was **removed 2026-11-15 (M18)** —
+  nothing imported it; the v4 capture supersedes it.
 
 Earlier **v2-era** versions of `config.json`/`route.json`/`comparison.json`
 (container 1,900 L, service 10 min, solver_time_limit 5 s, 63-truck fleet,

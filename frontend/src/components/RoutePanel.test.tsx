@@ -43,6 +43,8 @@ describe("RoutePanel", () => {
     expect(totals).toContain("2 of 3");
     expect(totals).toContain("1 vehicle(s)");
     expect(totals).toContain("by volume");
+    // M18 ③ §4.8 fleet separation: the recommendation is a solver input.
+    expect(totals).toContain("[demo assumption — solver input]");
 
     const unserved = document.querySelector('[data-testid="unserved-list"]')?.textContent ?? "";
     expect(unserved).toContain("11111111-2222-3333-4444-555555555555 · white");
@@ -53,10 +55,19 @@ describe("RoutePanel", () => {
     expect(document.body.textContent).toContain("NOT road distance");
 
     // v3 cost block + per-material volumes (fixture: 1 truck, brown only).
+    // M18 ③: the FLEET cost rows moved into TechDetails — only the trucks-in-
+    // use rows stay in the visible cost block (§4.8 fleet separation).
     const cost = document.querySelector('[data-testid="route-cost"]')?.textContent ?? "";
     expect(cost).toContain("1 vehicle(s)");
     expect(cost).toContain("500 EUR/day · 100,000 EUR/year");
     expect(cost).toContain("not invoiced");
+    expect(cost).not.toContain("recommended truck(s)");
+    const details = document.querySelector('[data-testid="route-tech-details"]')?.textContent ?? "";
+    expect(details).toContain("recommended truck(s)");
+    expect(details).toContain("500 EUR/day · 100,000 EUR/year"); // fleet cost rows
+    expect(details).toContain("[demo assumption — solver input]");
+    // M18 ⑫: objective value carries its unit.
+    expect(details).toContain("18,400 m");
     const volumes = document.querySelector('[data-testid="route-volumes-by-material"]')?.textContent ?? "";
     expect(volumes).toContain("1,200 L");
     expect(document.querySelector('[data-testid="route-travel-time-mode"]')?.textContent).toContain(
@@ -103,19 +114,25 @@ describe("RoutePanel", () => {
     expect(totals).toContain("99 vehicle(s)");
 
     // v3 cost block: [predicted] derivations, never invoiced amounts (§4.4).
+    // M18 ③: fleet-cost rows live in TechDetails now (§4.8 fleet separation).
     const cost = document.querySelector('[data-testid="route-cost"]')?.textContent ?? "";
     expect(cost).toContain("3 vehicle(s)");
     expect(cost).toContain("1,500 EUR/day · 300,000 EUR/year");
-    expect(cost).toContain("49,500 EUR/day · 9,900,000 EUR/year");
     expect(cost).toContain("not invoiced");
+    expect(cost).not.toContain("49,500 EUR/day");
+    const details = document.querySelector('[data-testid="route-tech-details"]')?.textContent ?? "";
+    expect(details).toContain("49,500 EUR/day · 9,900,000 EUR/year"); // fleet cost rows
+    expect(details).toContain("99 recommended truck(s)");
+    expect(details).toContain("[demo assumption — solver input]");
+    // M18 ⑫: objective value with unit (70,175 m median distance).
+    expect(details).toContain("70,175 m");
 
     // v3 compartment visibility: litres per material.
     const volumes = document.querySelector('[data-testid="route-volumes-by-material"]')?.textContent ?? "";
     expect(volumes).toContain("brown");
     expect(volumes).toContain("15,000 L");
 
-    // v3 travel_time_mode echo in technical details.
-    const details = document.querySelector('[data-testid="route-tech-details"]')?.textContent ?? "";
+    // v3 travel_time_mode echo in technical details (same details block).
     expect(details).toContain("fixed_per_leg");
 
     // Flat unserved entries render location · material + reason (424 of them).

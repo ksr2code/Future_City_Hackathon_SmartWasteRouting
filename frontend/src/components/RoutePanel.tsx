@@ -153,7 +153,22 @@ export function RoutePanel({
               <StatusBadge status={solution.status} />
               <span>{provenanceLabel(solution.distance_provenance)}</span>
             </div>
-            <p>Objective value: {solution.objective_value ?? "—"}</p>
+            <p>
+              Objective value:{" "}
+              {typeof solution.objective_value === "number" && Number.isFinite(solution.objective_value)
+                ? `${solution.objective_value.toLocaleString("en-US")} m`
+                : "—"}
+            </p>
+            {/* ③ §4.8 fleet separation: the fleet recommendation (×99) is a
+                solver input [demo assumption] — its cost rows live here in the
+                collapsible, not beside the operational totals. */}
+            <p data-testid="route-fleet-cost">
+              Recommended fleet cost ({solution.cost.fleet_cost.trucks} recommended truck(s) —{" "}
+              <span data-testid="route-fleet-solver-input">[demo assumption — solver input]</span>, §4.8):{" "}
+              {formatEur(solution.cost.fleet_cost.cost_eur_per_day)}/day ·{" "}
+              {formatEur(solution.cost.fleet_cost.cost_eur_per_year)}/year — [predicted] derived, not
+              invoiced (§4.4)
+            </p>
             <p data-testid="route-travel-time-mode">
               Travel time mode: {solution.travel_time_mode ?? "—"}
               {solution.travel_time_mode === "fixed_per_leg"
@@ -167,7 +182,9 @@ export function RoutePanel({
           <TotalsBar response={result} />
 
           {/* v3 cost block (§4.3): [predicted] derivations from the configured
-              cost parameters — never invoiced amounts (§4.4). */}
+              cost parameters — never invoiced amounts (§4.4). The recommended
+              FLEET cost rows moved into TechDetails (M18 ③, §4.8 fleet
+              separation: solver input ≠ observed operation). */}
           <div
             className="grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3"
             data-testid="route-cost"
@@ -179,10 +196,6 @@ export function RoutePanel({
             <Total
               label="Cost (trucks in use)"
               value={`${formatEur(solution.cost.cost_eur_per_day)}/day · ${formatEur(solution.cost.cost_eur_per_year)}/year`}
-            />
-            <Total
-              label={`Fleet cost: ${solution.cost.fleet_cost.trucks} recommended truck(s)`}
-              value={`${formatEur(solution.cost.fleet_cost.cost_eur_per_day)}/day · ${formatEur(solution.cost.fleet_cost.cost_eur_per_year)}/year`}
             />
           </div>
 
@@ -257,7 +270,7 @@ function TotalsBar({ response }: { response: RouteResponse }) {
       />
       <Total
         label={`Fleet: ${fleet_recommendation.vehicle_type_id}`}
-        value={`${fleet_recommendation.count} vehicle(s) — by volume ⌈${fleet_recommendation.basis.ceil_by_volume}⌉, by weight ⌈${fleet_recommendation.basis.ceil_by_weight}⌉ (brief §4)`}
+        value={`${fleet_recommendation.count} vehicle(s) — [demo assumption — solver input] · by volume ⌈${fleet_recommendation.basis.ceil_by_volume}⌉, by weight ⌈${fleet_recommendation.basis.ceil_by_weight}⌉ (brief §4)`}
       />
     </div>
   );

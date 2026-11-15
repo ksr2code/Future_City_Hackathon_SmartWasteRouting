@@ -224,7 +224,9 @@ function BaselineCard({ lang, baseline, anchorPct }: {
       </p>
       <dl className="mt-1 space-y-0.5 text-xs text-slate-600">
         <div className="flex justify-between gap-2">
-          <dt>{t(lang, "overview.toggle.serviceFull")}</dt>
+          {/* ① observed figure → observed vocabulary (§6): NOT "simulated
+              emptying events" — the baseline service level IS observed. */}
+          <dt>{t(lang, "overview.toggle.serviceObserved")}</dt>
           <dd className="font-semibold text-slate-800">{anchorPct ?? "— %"}</dd>
         </div>
         <div className="flex justify-between gap-2">
@@ -361,31 +363,50 @@ export function ScenariosPanel({
       ? `${scenarioData.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
       : null;
 
-  // Timeline data: merge both strategies' days by index (lengths tolerated).
+  // Timeline data: merge both strategies' days AND the §5.2.5 v5 observed
+  // visit counts by date (sparse, active days only — union of all sources,
+  // chronological). Observed is [observed]; the strategies are [predicted].
   const timeline = useMemo(() => {
     if (simulationData === null) return [];
     const fixed = simulationData.strategies.find((s) => s.id === "fixed_frequency");
     const demand = simulationData.strategies.find((s) => s.id === "demand_driven");
-    const len = Math.max(fixed?.days.length ?? 0, demand?.days.length ?? 0);
-    const rows: Array<{
-      date: string;
-      fixed: number | null;
-      demand: number | null;
-    }> = [];
-    for (let i = 0; i < len; i += 1) {
-      rows.push({
-        date: fixed?.days[i]?.date ?? demand?.days[i]?.date ?? "",
-        fixed: fixed?.days[i]?.collections ?? null,
-        demand: demand?.days[i]?.collections ?? null,
-      });
+    const byDate = new Map<
+      string,
+      { fixed: number | null; demand: number | null; observed: number | null }
+    >();
+    const touch = (date: string) => {
+      let row = byDate.get(date);
+      if (row === undefined) {
+        row = { fixed: null, demand: null, observed: null };
+        byDate.set(date, row);
+      }
+      return row;
+    };
+    for (const day of fixed?.days ?? []) {
+      touch(day.date).fixed = day.collections;
     }
-    return rows;
+    for (const day of demand?.days ?? []) {
+      touch(day.date).demand = day.collections;
+    }
+    for (const day of simulationData.observed_days ?? []) {
+      touch(day.date).observed = day.collections;
+    }
+    return [...byDate.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([date, row]) => ({ date, ...row }));
   }, [simulationData]);
 
+  // Bar scale covers all three series; the spike stat stays replay-only
+  // ("max day in the replay" — the observed row is not part of the replay).
   const maxCollections = timeline.reduce(
     (max, row) => Math.max(max, row.fixed ?? 0, row.demand ?? 0),
     0,
   );
+  const maxScale = timeline.reduce(
+    (max, row) => Math.max(max, row.fixed ?? 0, row.demand ?? 0, row.observed ?? 0),
+    0,
+  );
+  const hasObserved = (simulationData?.observed_days.length ?? 0) > 0;
 
   const sliderRow = (
     field: SliderField,
@@ -488,6 +509,16 @@ export function ScenariosPanel({
                 titleKey="scenarios.spreadLabel"
               />
             </div>
+            {/* ⑦ per-year basis note: the baseline EUR/year is 365-day calendar
+                scaled; the strategy EUR/year rows are pro-rated over the API's
+                operating_days_per_year [demo assumption]. Value from the echo. */}
+            {isFiniteNumber(scenarioData.config_echo.operating_days_per_year) ? (
+              <p className="text-xs leading-relaxed text-slate-500" data-testid="scenarios-year-basis">
+                {tf(lang, "overview.money.yearBasis", {
+                  days: scenarioData.config_echo.operating_days_per_year.toLocaleString("en-US"),
+                })}
+              </p>
+            ) : null}
             <TechDetails label={t(lang, "techdetails.label")} testid="scenarios-tech-details">
               {scenarioData.config_echo !== null && scenarioData.config_echo !== undefined ? (
                 <p data-testid="scenarios-config-echo">
@@ -538,8 +569,8 @@ export function ScenariosPanel({
                       {timeline.map((row, i) => {
                         const v = row[key];
                         const height =
-                          v !== null && maxCollections > 0
-                            ? Math.max(1, Math.round((v / maxCollections) * 100))
+                          v !== null && maxScale > 0
+                            ? Math.max(1, Math.round((v / maxScale) * 100))
                             : 0;
                         return (
                           <div
@@ -553,6 +584,32 @@ export function ScenariosPanel({
                     </div>
                   </div>
                 ))}
+                {/* ⑮ §5.2.5 v5 observed visit counts [observed] — same window,
+                    active days only; not a simulation output (§6 vocabulary). */}
+                {hasObserved ? (
+                  <div data-testid="timeline-observed-row">
+                    <p className="text-xs font-medium text-slate-600">
+                      {t(lang, "scenarios.timeline.observedLegend")}
+                    </p>
+                    <div className="flex h-12 items-end gap-px">
+                      {timeline.map((row, i) => {
+                        const v = row.observed;
+                        const height =
+                          v !== null && maxScale > 0
+                            ? Math.max(1, Math.round((v / maxScale) * 100))
+                            : 0;
+                        return (
+                          <div
+                            key={`observed-${i}`}
+                            className={`w-full min-w-[1px] ${v !== null ? "bg-emerald-700" : "bg-slate-100"}`}
+                            style={{ height: `${height}%` }}
+                            title={`${row.date}: ${v ?? 0} [observed]`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 <p className="text-xs text-slate-600">
                   {tf(lang, "scenarios.timeline.spike", {
                     n: maxCollections.toLocaleString("en-US"),

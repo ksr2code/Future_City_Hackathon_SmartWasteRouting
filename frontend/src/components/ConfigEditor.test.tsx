@@ -43,9 +43,17 @@ describe("ConfigEditor", () => {
     // Defaults from GET /api/config shown next to inputs (v3 values).
     expect(document.body.textContent).toContain("default: 80 %");
     expect(document.body.textContent).toContain("default: 3,000 L");
-    // v3 source tags: 19 [demo assumption] + 8 [representative] — never mixed.
-    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBe(19);
+    // v3 source tags: 16 [demo assumption] + 8 [representative] + 3
+    // [literature] (densities carry the AVV citation) — never mixed (§6).
+    expect(document.querySelectorAll('[data-testid="assumption-tag"]').length).toBe(16);
     expect(document.querySelectorAll('[data-testid="representative-tag"]').length).toBe(8);
+    const literatureTags = document.querySelectorAll('[data-testid="literature-tag"]');
+    expect(literatureTags.length).toBe(3);
+    // [literature] shows the API's verbatim AVV citation — checkable provenance.
+    expect(document.body.textContent).toContain("German AVV table AVV 20 01 02");
+    // M18 ⑭: the two operating-days fields are disambiguated.
+    expect(document.body.textContent).toContain("Operating days (per week)");
+    expect(document.body.textContent).toContain("Operating days (per year)");
     // Highlighted key-parameter group + v3 fields exist.
     expect(document.querySelector('[data-testid="config-travel_time_mode"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="config-cost_per_truck_day_eur"]')).not.toBeNull();

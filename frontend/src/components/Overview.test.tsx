@@ -268,12 +268,17 @@ describe("Overview — comparison v2 (scenarios/gains/determinism)", () => {
     expect(savings).toContain("Derived saving share");
     expect(savings).toContain("84.6 %");
     // v3 fleet-budget card (ortools fleet recommendation priced at §4.6 rates).
+    // M18 ④ §4.8 fleet separation: it is technical detail — it must live
+    // inside the collapsible TechDetails, not as a standalone card.
     const budget = document.querySelector('[data-testid="fleet-budget"]')?.textContent ?? "";
     expect(budget).toContain("Fleet budget");
     expect(budget).toContain("99 vehicles");
     expect(budget).toContain("49,500 EUR");
     expect(budget).toContain("9,900,000 EUR");
     expect(budget).toContain("predicted");
+    expect(
+      document.querySelector('[data-testid="comparison-tech-details"] [data-testid="fleet-budget"]'),
+    ).not.toBeNull();
     // v3 days-to-full KPI ([predicted] estimates from emptying records; all
     // numbers from the API, never hardcoded).
     const dtf = document.querySelector('[data-testid="keynum-days-to-full"]')?.textContent ?? "";
@@ -544,6 +549,15 @@ describe("Overview — §5.2.6 money story card", () => {
     expect(baseline).toContain("523"); // truck-days
     expect(baseline).toContain("26.9 %"); // observed anchor = service beside cost (§6)
     expect(baseline).toContain("observed × representative time model");
+    // M18 ①: the baseline service figure is OBSERVED — "emptying records"
+    // vocabulary, never "simulated emptying events" (§6).
+    expect(baseline).toContain("Emptying records full-or-overfull [observed]");
+    // M18 ⑦: the two EUR/year rows annualise on different bases — labelled,
+    // days taken from the API echo (200 in the fixture), never hardcoded.
+    const yearBasis = document.querySelector('[data-testid="money-year-basis"]')?.textContent ?? "";
+    expect(yearBasis).toContain("365-day year");
+    expect(yearBasis).toContain("200 operating days");
+    expect(yearBasis).toContain("[demo assumption]");
     const plan = document.querySelector('[data-testid="money-plan"]')?.textContent ?? "";
     expect(plan).toContain("171,000 EUR"); // day_spread.cost_eur_total
     expect(plan).toContain("0.0 %"); // simulated overflow beside cost (§6)
@@ -621,6 +635,59 @@ describe("Overview — §5.2.6 money story card", () => {
     card = document.querySelector('[data-testid="money-story"]')?.textContent ?? "";
     expect(card).toContain("Could not compute the today-vs-plan comparison");
     expect(card).not.toContain("261,500 EUR");
+  });
+});
+
+describe("Overview — M18 wording fixes", () => {
+  it("drops the vehicle counts from the keynum-distance note (fleet belongs to the money story)", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    // M18 ⑤ §4.8 fleet separation: the distance key number is about
+    // kilometres, not about "vehicles: 183 → 99" — truck counts stay in the
+    // money story and the comparison steps.
+    const keynum = document.querySelector('[data-testid="keynum-distance"]')?.textContent ?? "";
+    expect(keynum).not.toContain("vehicles");
+    expect(keynum).not.toContain("183");
+  });
+
+  it("shows the real empty label (not the recommendation error) when nothing is predicted over threshold", async () => {
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/candidates": () =>
+        jsonResponse({ ...selectionFixture, selected: [], skipped: [] }),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    // M18 ⑪: an empty example list is a state fact ("nothing to empty"),
+    // never the recommendation error wording (§6 honesty).
+    expect(document.body.textContent).toContain(
+      "No container is currently predicted at or above the emptying threshold.",
+    );
+    expect(document.querySelector('[data-testid="recommendation-examples"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Could not compute the recommendation");
   });
 });
 

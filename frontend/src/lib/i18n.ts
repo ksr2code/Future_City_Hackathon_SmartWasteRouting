@@ -80,6 +80,7 @@ const en = {
     "Basis: records observed · rates derived · plan simulated (§5.2.5 data_basis).",
   "scenarios.timeline.fixedLegend": "Fixed schedule (status quo)",
   "scenarios.timeline.demandLegend": "Demand-driven (plan)",
+  "scenarios.timeline.observedLegend": "Observed visits [observed]",
   "scenarios.timeline.spike": "Max day in the replay: {n} collections.",
   "scenarios.timeline.empty": "Run the what-if above to see the daily replay.",
   "scenarios.timeline.megaDay":
@@ -92,6 +93,7 @@ const en = {
   "overview.fleetBudget.perYear": "Cost per year",
   "overview.fleetBudget.note":
     "Recommended fleet priced at the configured truck cost — API-derived [predicted], never an invoice amount.",
+  "overview.fleetBudget.basis": "[demo assumption — solver input]",
 
   "config.compartments.hint":
     "Leave all three empty for equal thirds, or fill all three — they must sum to the truck volume.",
@@ -110,17 +112,20 @@ const en = {
   "overview.recommendation.canWait": "{n} can wait",
   "overview.recommendation.noForecast": "{n} have no forecast",
   "overview.recommendation.examples": "Top examples",
+  "overview.recommendation.none":
+    "No container is currently predicted at or above the emptying threshold.",
   "overview.recommendation.caption":
     "What this shows: which containers are recommended for the next collection round and why. Why it matters: overfull containers annoy residents — this turns emptying records into an explainable work list.",
 
   "overview.toggle.title": "Today vs. with our plan",
   "overview.toggle.subtitle":
     "Cost is always shown with its service level — the plan that costs less is not automatically better (§6).",
-  "overview.toggle.today": "Today (status quo)",
+  "overview.toggle.today": "Modelled 28-day cycle [demo assumption]",
   "overview.toggle.plan": "Demand-driven, same-day (no spacing)",
   "overview.toggle.costWindow": "over the replayed window",
   "overview.toggle.costYear": "Pro-rated cost per year",
   "overview.toggle.serviceFull": "Simulated emptying events full-or-overfull",
+  "overview.toggle.serviceObserved": "Emptying records full-or-overfull [observed]",
   "overview.toggle.overflow": "Container-days above 100 % fill (overflow)",
   "overview.toggle.maxFill": "Max simulated fill",
   "overview.toggle.truckDays": "Truck-days over the window",
@@ -148,6 +153,8 @@ const en = {
     "The plan costs LESS (delta {delta}) while the simulated service improves.",
   "overview.toggle.serviceDelta":
     "Simulated service delta (share full-or-overfull): {delta} — positive = more full-or-overfull emptying events than today's strategy.",
+  "overview.toggle.costYearBasis":
+    "Strategy per-year figures are pro-rated over {days} operating days [demo assumption].",
 
   "overview.beforeafter.title": "From sweeping everything to optimised routes",
   "overview.beforeafter.caption":
@@ -165,12 +172,14 @@ const en = {
   "overview.compare.selectionGainNegative":
     "Negative = the selection sweep covered MORE distance than the sweep-all run — selection did not pay off for distance here.",
   "overview.compare.routingGain": "Routing gain (selection sweep → optimised): {gain}",
-  "overview.compare.totalGain": "Total distance gain (status quo → optimised): {gain}",
+  "overview.compare.totalGain": "Total distance gain (sweep-all → optimised): {gain}",
   "overview.compare.gainUnavailable":
     "Gain not available for this run — no usable optimised solution to compare against.",
   "overview.compare.perKgNote":
     "Distance per kg collected is the like-for-like comparison across these scenarios (they serve different numbers of stops); raw distances are not comparable. Distances are straight-line estimates, not road kilometres.",
-  "overview.compare.savings": "Derived saving share (total gain ÷ status-quo distance): {pct}",
+  "overview.compare.savings": "Derived saving share (total gain ÷ sweep-all distance): {pct}",
+  "overview.compare.totalGainNegative":
+    "Negative = the optimised run covered MORE distance than the sweep-all run — shown straight, not spun.",
   "overview.compare.determinism.identical":
     "Optimised result deterministic: identical distance across {runs} solves ({median}).",
   "overview.compare.determinism.medianOfRuns":
@@ -216,6 +225,9 @@ const en = {
   "containers.interval.atLeastTitle":
     "Censored lower bound: a contributing record was full or overfull — true filling time may be shorter (§1.5).",
   "containers.interval.noEstimate": "no estimate",
+  "containers.interval.overdue": "overdue",
+  "containers.interval.overdueTitle":
+    "The [predicted] full date lies in the past: the rate model assumes no emptying after the last record — treat this container as due for a check.",
 
   "overview.compare.serviceAnchor":
     "{pct} of emptying records full-or-overfull — observed service anchor, shown beside every cost (§6)",
@@ -286,6 +298,8 @@ const en = {
     "Today's operation comes from the observed emptying records; the plan spreads the same collections over more days. Every cost is shown with its service level.",
   "overview.money.observedTitle": "Observed operation",
   "overview.money.observedServiceBasis": "observed emptying records [observed]",
+  "overview.money.yearBasis":
+    "Per-year bases differ: the observed baseline is scaled to a 365-day year; the strategies are pro-rated over {days} operating days [demo assumption].",
   "overview.money.medianTrucks": "Trucks per active day (median)",
   "overview.money.peakTrucks": "Peak trucks",
   "overview.money.activeDays": "Active days / calendar days",
@@ -419,6 +433,7 @@ const de: Record<TranslationKey, string> = {
     "Basis: Daten beobachtet · Raten abgeleitet · Plan simuliert (§5.2.5 data_basis).",
   "scenarios.timeline.fixedLegend": "Fester Plan (Status quo)",
   "scenarios.timeline.demandLegend": "Bedarfsorientiert (Plan)",
+  "scenarios.timeline.observedLegend": "Beobachtete Besuche [beobachtet]",
   "scenarios.timeline.spike": "Stärkster Tag der Wiederholung: {n} Leerungen.",
   "scenarios.timeline.empty": "Oben das Was-wäre-wenn rechnen, um den Tagesverlauf zu sehen.",
   "scenarios.timeline.megaDay":
@@ -431,6 +446,7 @@ const de: Record<TranslationKey, string> = {
   "overview.fleetBudget.perYear": "Kosten pro Jahr",
   "overview.fleetBudget.note":
     "Empfohlene Flotte zum konfigurierten Fahrzeugsatz — von der API abgeleitet [Prognose], nie ein Rechnungsbetrag.",
+  "overview.fleetBudget.basis": "[Demo-Annahme — Solver-Eingabe]",
 
   "config.compartments.hint":
     "Alle drei leer lassen (gleiche Drittel) oder alle drei ausfüllen — die Summe muss dem Fahrzeuggesamtvolumen entsprechen.",
@@ -449,17 +465,20 @@ const de: Record<TranslationKey, string> = {
   "overview.recommendation.canWait": "{n} kann warten",
   "overview.recommendation.noForecast": "{n} ohne Prognose",
   "overview.recommendation.examples": "Top-Beispiele",
+  "overview.recommendation.none":
+    "Aktuell ist kein Behälter voraussichtlich auf oder über der Leeren-Schwelle.",
   "overview.recommendation.caption":
     "Was das zeigt: welche Behälter für die nächste Sammelrunde empfohlen werden und warum. Warum das zählt: übervolle Behälter ärgern Anwohner — daraus wird eine begründete Arbeitsliste.",
 
   "overview.toggle.title": "Heute vs. mit unserem Plan",
   "overview.toggle.subtitle":
     "Kosten werden immer zusammen mit dem Serviceniveau gezeigt — billiger heißt nicht automatisch besser (§6).",
-  "overview.toggle.today": "Heute (Status quo)",
+  "overview.toggle.today": "Modellierter 28-Tage-Zyklus [Demo-Annahme]",
   "overview.toggle.plan": "Bedarfsorientiert, gleicher Tag (ohne Staffelung)",
   "overview.toggle.costWindow": "über den gespielten Zeitraum",
   "overview.toggle.costYear": "Hochgerechnete Kosten pro Jahr",
   "overview.toggle.serviceFull": "Simulierte Leerungs-Ereignisse voll oder übervoll",
+  "overview.toggle.serviceObserved": "Leerungsdaten voll oder übervoll [beobachtet]",
   "overview.toggle.overflow": "Behälter-Tage über 100 % Füllstand (Überlauf)",
   "overview.toggle.maxFill": "Maximal simulierter Füllstand",
   "overview.toggle.truckDays": "Fahrzeug-Tage im Zeitraum",
@@ -487,6 +506,8 @@ const de: Record<TranslationKey, string> = {
     "Der Plan kostet WENIGER (Differenz {delta}) und der simulierte Service verbessert sich.",
   "overview.toggle.serviceDelta":
     "Simulierte Service-Differenz (Anteil voll/übervoll): {delta} — positiv = mehr voll/übervoll geleerte Ereignisse als bei der heutigen Strategie.",
+  "overview.toggle.costYearBasis":
+    "Die Jahreswerte der Strategien sind auf {days} Betriebstage hochgerechnet [Demo-Annahme].",
 
   "overview.beforeafter.title": "Vom Alles-Abfahren zur optimierten Route",
   "overview.beforeafter.caption":
@@ -504,12 +525,14 @@ const de: Record<TranslationKey, string> = {
   "overview.compare.selectionGainNegative":
     "Negativ = der Auswahl-Sweep hatte eine GRÖSSERE Strecke als der Sweep-alle-Lauf — die Auswahl hat sich hier (bei der Strecke) nicht gelohnt.",
   "overview.compare.routingGain": "Routing-Gewinn (Auswahl-Sweep → optimiert): {gain}",
-  "overview.compare.totalGain": "Gesamt-Strecken-Gewinn (Status quo → optimiert): {gain}",
+  "overview.compare.totalGain": "Gesamt-Strecken-Gewinn (Sweep-alle → optimiert): {gain}",
   "overview.compare.gainUnavailable":
     "Gewinn für diesen Lauf nicht verfügbar — keine nutzbare optimierte Lösung zum Vergleich.",
   "overview.compare.perKgNote":
     "Strecke pro kg ist der faire Vergleich zwischen diesen Szenarien (sie bedienen unterschiedlich viele Stopps); rohe Strecken sind nicht vergleichbar. Entfernungen sind Luftlinien-Schätzungen, keine Straßen-Kilometer.",
-  "overview.compare.savings": "Abgeleitete Ersparnis (Gesamtgewinn ÷ Status-quo-Strecke): {pct}",
+  "overview.compare.savings": "Abgeleitete Ersparnis (Gesamtgewinn ÷ Sweep-alle-Stopp-Strecke): {pct}",
+  "overview.compare.totalGainNegative":
+    "Negativ = der optimierte Lauf hatte eine GRÖSSERE Strecke als der Sweep-alle-Lauf — ehrlich gezeigt, nicht beschönigt.",
   "overview.compare.determinism.identical":
     "Optimiertes Ergebnis deterministisch: identische Strecke über {runs} Läufe ({median}).",
   "overview.compare.determinism.medianOfRuns":
@@ -555,6 +578,9 @@ const de: Record<TranslationKey, string> = {
   "containers.interval.atLeastTitle":
     "Zensierte Untergrenze: ein beitragender Datensatz war voll oder übervoll — die tatsächliche Füllzeit kann kürzer sein (§1.5).",
   "containers.interval.noEstimate": "keine Schätzung",
+  "containers.interval.overdue": "überfällig",
+  "containers.interval.overdueTitle":
+    "Das [prognostizierte] Voll-Datum liegt in der Vergangenheit: das Ratenmodell nimmt keine Leerung nach dem letzten Datensatz an — diesen Behälter zeitnah prüfen.",
 
   "overview.compare.serviceAnchor":
     "{pct} der Leerungsdaten voll oder übervoll — beobachteter Serviceniveau-Anker, neben jeder Kostenangabe gezeigt (§6)",
@@ -625,6 +651,8 @@ const de: Record<TranslationKey, string> = {
     "Der heutige Betrieb stammt aus den beobachteten Leerungsdaten; der Plan verteilt dieselben Sammlungen auf mehr Tage. Jede Kostenangabe steht mit ihrem Service-Level.",
   "overview.money.observedTitle": "Beobachteter Betrieb",
   "overview.money.observedServiceBasis": "beobachtete Leerungsdaten [beobachtet]",
+  "overview.money.yearBasis":
+    "Die Jahres-Basen unterscheiden sich: die beobachtete Basis ist auf ein 365-Tage-Jahr hochgerechnet; die Strategien rechnen mit {days} Betriebstagen [Demo-Annahme].",
   "overview.money.medianTrucks": "Lkw pro aktiven Tag (Median)",
   "overview.money.peakTrucks": "Lkw-Spitze",
   "overview.money.activeDays": "Aktive Tage / Kalendertage",

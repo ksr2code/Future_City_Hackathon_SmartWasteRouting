@@ -71,6 +71,25 @@ export function RepresentativeTag() {
   );
 }
 
+/**
+ * [literature] tag (§6): the value came from published literature (the AVV
+ * glass-density table) — visually distinct from [representative] and
+ * [demo assumption]; the API's verbatim source citation is shown so the
+ * provenance is checkable, never silently upgraded to a fact (§5.3).
+ */
+export function LiteratureTag({ detail }: { detail?: string }) {
+  return (
+    <span
+      className="inline-block rounded border border-violet-400 bg-violet-50 px-1.5 py-0.5 text-xs font-medium text-violet-800"
+      data-testid="literature-tag"
+      title={detail}
+    >
+      [literature]
+      {detail ? <span className="font-normal"> {detail}</span> : null}
+    </span>
+  );
+}
+
 const MATERIAL_SWATCH: Record<MaterialType, string> = {
   brown: "bg-amber-800",
   green: "bg-emerald-600",

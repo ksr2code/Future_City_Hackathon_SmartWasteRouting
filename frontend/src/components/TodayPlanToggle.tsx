@@ -30,6 +30,19 @@ export interface TodayPlanToggleProps {
   datasetVersion: number;
   /** Bumped by the config editor's Recalculate button. */
   recalculateKey?: number;
+  /**
+   * ⑯ Shared §5.2.6 fetch state owned by the Overview money story (one
+   * POST /api/scenarios for both views). When provided, this component NEVER
+   * fetches on its own — it renders from the shared payload and mirrors the
+   * shared loading/error/404 states. Omitted → standalone mode fetches itself
+   * (own tests, reuse outside the Overview).
+   */
+  shared?: {
+    payload: ScenarioResponse | null;
+    loading: boolean;
+    error: string | null;
+    notFound: boolean;
+  };
 }
 
 function strategyById(
@@ -134,6 +147,7 @@ export function TodayPlanToggle({
   lang,
   datasetVersion,
   recalculateKey = 0,
+  shared,
 }: TodayPlanToggleProps) {
   const [payload, setPayload] = useState<ScenarioResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -141,9 +155,11 @@ export function TodayPlanToggle({
   const [notFound, setNotFound] = useState(false);
   const [side, setSide] = useState<Side>("today");
 
-  // Empty body → every parameter uses the server default (§5.2.4) — the UI
-  // hardcodes no thresholds, costs or frequencies.
+  // ⑯ Shared mode: the Overview owns the POST /api/scenarios call — this
+  // component renders from `shared` and never fires a second identical POST.
+  // Standalone mode (no shared prop): own fetch with server defaults.
   useEffect(() => {
+    if (shared !== undefined) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -174,13 +190,25 @@ export function TodayPlanToggle({
     return () => {
       cancelled = true;
     };
-  }, [datasetVersion, recalculateKey]);
+  }, [datasetVersion, recalculateKey, shared]);
 
-  const today = strategyById(payload, "fixed_frequency");
-  const plan = strategyById(payload, "demand_driven");
+  const scenarios = shared !== undefined ? shared.payload : payload;
+  const scenariosLoading = shared !== undefined ? shared.loading : loading;
+  const scenariosError = shared !== undefined ? shared.error : error;
+  const scenariosNotFound = shared !== undefined ? shared.notFound : notFound;
+
+  const today = strategyById(scenarios, "fixed_frequency");
+  const plan = strategyById(scenarios, "demand_driven");
   const anchorPct =
-    payload !== null && isFiniteNumber(payload.observed_anchor.share_full_or_overfull_pct)
-      ? `${payload.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
+    scenarios !== null && isFiniteNumber(scenarios.observed_anchor.share_full_or_overfull_pct)
+      ? `${scenarios.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
+      : null;
+  // ⑦ per-year basis: strategy EUR/year figures are pro-rated over the API's
+  // operating_days_per_year [demo assumption] — never the 365-day calendar
+  // basis of the observed baseline. Value from the response, not hardcoded.
+  const operatingDaysPerYear =
+    scenarios !== null && isFiniteNumber(scenarios.config_echo.operating_days_per_year)
+      ? scenarios.config_echo.operating_days_per_year
       : null;
 
   // Derived tradeoff (§6): cost delta AND service delta always together.
@@ -251,23 +279,23 @@ export function TodayPlanToggle({
         {toggleButton("plan", "overview.toggle.plan", "toggle-plan")}
       </div>
 
-      {loading ? (
+      {scenariosLoading ? (
         <div className="mt-3">
           <LoadingState label={t(lang, "overview.state.scenariosLoading")} />
         </div>
       ) : null}
-      {error !== null && !loading ? (
+      {scenariosError !== null && !scenariosLoading ? (
         <div className="mt-3">
-          <ErrorState label={t(lang, "overview.state.scenariosError")} hint={error} />
+          <ErrorState label={t(lang, "overview.state.scenariosError")} hint={scenariosError} />
         </div>
       ) : null}
-      {notFound && !loading && error === null ? (
+      {scenariosNotFound && !scenariosLoading && scenariosError === null ? (
         <div className="mt-3">
           <EmptyState label={t(lang, "overview.state.scenariosNoDataset")} />
         </div>
       ) : null}
 
-      {!loading && error === null && !notFound && today !== null && plan !== null ? (
+      {!scenariosLoading && scenariosError === null && !scenariosNotFound && today !== null && plan !== null ? (
         <div className="mt-3 space-y-2">
           {/* Observed anchor — the reference service level beside every cost (§6). */}
           <p
@@ -279,6 +307,15 @@ export function TodayPlanToggle({
               : t(lang, "overview.toggle.anchorUnavailable")}{" "}
             <span className="font-normal">{t(lang, "overview.toggle.anchorBasis")}</span>
           </p>
+          {/* ⑦ basis note for both EUR/year rows (200 operating days [demo
+              assumption] — differs from the observed baseline's 365-day basis). */}
+          {operatingDaysPerYear !== null ? (
+            <p className="text-xs text-slate-500" data-testid="toggle-year-basis">
+              {tf(lang, "overview.toggle.costYearBasis", {
+                days: operatingDaysPerYear.toLocaleString("en-US"),
+              })}
+            </p>
+          ) : null}
 
           {side === "today" ? (
             <StrategyBlock lang={lang} strategy={today} testid="toggle-strategy-today" />

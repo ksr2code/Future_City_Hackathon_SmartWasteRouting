@@ -114,6 +114,36 @@ describe("ContainersIntervalPanel — rows", () => {
     expect(count()).toBe(1);
     expect(document.querySelector('[data-testid="interval-rows"]')?.textContent).toContain("white");
   });
+  it("flags [predicted] full dates in the past as overdue, and future dates not (M18 ⑰)", async () => {
+    // Fixture brown row: predicted_full_date 2026-10-23 — in the past relative
+    // to the client clock → overdue marker next to the date.
+    stubDays(daysToFullFixture);
+    render(<ContainersIntervalPanel lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    const cell = document.querySelector('[data-testid="interval-predicted-full-date"]');
+    expect(cell?.textContent).toContain("2026-10-23");
+    expect(document.querySelectorAll('[data-testid="interval-overdue"]').length).toBe(1);
+
+    // A future date must NOT be flagged — marker is past-only.
+    const futureDate = "2999-01-01";
+    const future = {
+      ...daysToFullFixture,
+      series: [
+        { ...daysToFullFixture.series[0], predicted_full_date: futureDate },
+        ...daysToFullFixture.series.slice(1),
+      ],
+    };
+    cleanup();
+    vi.unstubAllGlobals();
+    stubDays(future);
+    render(<ContainersIntervalPanel lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+    expect(document.querySelector('[data-testid="interval-rows"]')?.textContent).toContain(futureDate);
+    expect(document.querySelector('[data-testid="interval-overdue"]')).toBeNull();
+  });
 });
 
 describe("ContainersIntervalPanel — states", () => {

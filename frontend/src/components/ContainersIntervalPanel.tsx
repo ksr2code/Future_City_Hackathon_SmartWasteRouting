@@ -23,6 +23,11 @@ import { EmptyState, ErrorState, LoadingState } from "./states";
 
 const VISIBLE_ROWS = 50;
 
+/** Today's ISO date (client clock) — reference for the overdue marker. The
+ *  marker only flags [predicted] dates in the past; it is never a collection
+ *  fact. Computed once per module load is enough for a date-only comparison. */
+const TODAY_ISO = new Date().toISOString().slice(0, 10);
+
 export interface ContainersIntervalPanelProps {
   lang: Lang;
   datasetVersion: number;
@@ -238,7 +243,20 @@ export function ContainersIntervalPanel({ lang, datasetVersion }: ContainersInte
                           </span>
                         )}
                       </td>
-                      <td className="px-2 py-1.5">{row.predicted_full_date ?? "—"}</td>
+                      <td className="px-2 py-1.5" data-testid="interval-predicted-full-date">
+                        {row.predicted_full_date ?? "—"}
+                        {/* ⑰ [predicted] date in the past → overdue marker
+                            (never clamped by the API; flagged here, §5.2.3). */}
+                        {row.predicted_full_date !== null && row.predicted_full_date < TODAY_ISO ? (
+                          <span
+                            className="ml-1 rounded border border-red-300 bg-red-100 px-1 py-0.5 font-semibold text-red-900"
+                            data-testid="interval-overdue"
+                            title={t(lang, "containers.interval.overdueTitle")}
+                          >
+                            {t(lang, "containers.interval.overdue")}
+                          </span>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

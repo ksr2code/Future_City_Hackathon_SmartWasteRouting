@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   MATERIAL_TYPES,
   sourceLabel,
+  sourceLabelVerbatim,
   type ConfigDefaults,
   type MaterialType,
   type PolicyConfigOverride,
@@ -10,7 +11,7 @@ import {
 } from "../lib/api";
 import { formatDensity } from "../lib/format";
 import { t, type Lang, type TranslationKey } from "../lib/i18n";
-import { AssumptionTag, RepresentativeTag } from "./Badges";
+import { AssumptionTag, LiteratureTag, RepresentativeTag } from "./Badges";
 import { Panel } from "./Panel";
 import { ErrorState, LoadingState } from "./states";
 
@@ -68,8 +69,8 @@ const KEY_ROUTING_NUMBER_FIELDS: FieldSpec[] = [
   { name: "stop_service_minutes", label: "Emptying time per container", unit: "min", kind: "int", section: "routing" },
   { name: "fixed_travel_minutes", label: "Travel time per leg", unit: "min", kind: "int", section: "routing", hint: "applies to every leg incl. depot/disposal [interpretation]" },
   { name: "cost_per_truck_day_eur", label: "Truck cost", unit: "EUR/day", kind: "float", section: "routing" },
-  { name: "operating_days_per_week", label: "Operating days", unit: "d/week", kind: "int", section: "routing" },
-  { name: "operating_days_per_year", label: "Operating days", unit: "d/year", kind: "int", section: "routing" },
+  { name: "operating_days_per_week", label: "Operating days (per week)", unit: "d/week", kind: "int", section: "routing" },
+  { name: "operating_days_per_year", label: "Operating days (per year)", unit: "d/year", kind: "int", section: "routing" },
   { name: "geography_seed", label: "Bin locations: seed", unit: "seed", kind: "int", section: "routing", hint: "synthetic layout knob (0 = current layout)" },
   { name: "geography_spread_km", label: "Bin locations: spread", unit: "km", kind: "float", section: "routing", hint: "synthetic 1–spread km band" },
 ];
@@ -133,9 +134,19 @@ function defaultValue(config: ConfigDefaults | null, spec: FieldSpec): number | 
 /**
  * Source tag for one field from the v3 `sources` map (fail-safe via
  * `sourceLabel`: anything missing/unknown labels [demo assumption], §5.3).
+ * [literature] gets its own violet tag with the API's verbatim citation
+ * (e.g. the AVV glass-density table) — never styled as a [demo assumption].
  */
 function SourceTag({ config, sourceKey }: { config: ConfigDefaults | null; sourceKey: string }) {
-  if (sourceLabel(config, sourceKey) === "representative") return <RepresentativeTag />;
+  const label = sourceLabel(config, sourceKey);
+  if (label === "representative") return <RepresentativeTag />;
+  if (label === "literature") {
+    const verbatim = sourceLabelVerbatim(config, sourceKey);
+    // Fail-safe: without a verbatim citation the tag degrades to "[literature]"
+    // alone — never borrows the [demo assumption] fallback wording.
+    const detail = verbatim === "[demo assumption]" ? undefined : verbatim.replace(/^\[literature\]\s*/, "");
+    return <LiteratureTag detail={detail} />;
+  }
   return <AssumptionTag />;
 }
 
@@ -231,9 +242,10 @@ export function ConfigEditor({
       subtitle={
         <>
           Defaults come from GET /api/config. Empty field = use default (no override sent). Values
-          from the challenge representative are tagged <strong>[representative]</strong> (blue);
-          everything else stays <strong>[demo assumption]</strong> (amber) — editing a value never
-          turns it into an observed fact (§4.6/§5.3). Use <strong>Recalculate</strong> to re-run the
+          from the challenge representative are tagged <strong>[representative]</strong> (blue); values
+          from published literature are tagged <strong>[literature]</strong> (violet, with the source
+          citation); everything else stays <strong>[demo assumption]</strong> (amber) — editing a value
+          never turns it into an observed fact (§4.6/§5.3). Use <strong>Recalculate</strong> to re-run the
           auto-computed views with these overrides.
         </>
       }

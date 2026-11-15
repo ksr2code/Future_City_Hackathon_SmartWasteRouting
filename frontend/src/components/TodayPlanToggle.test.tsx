@@ -227,6 +227,50 @@ describe("TodayPlanToggle — cost + service together (§6)", () => {
   });
 });
 
+describe("TodayPlanToggle — shared fetch state (Overview ⑯)", () => {
+  it("renders from the shared payload WITHOUT its own fetch, with the year-basis note", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(scenariosFixture as object, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    // Overview owns the POST /api/scenarios call — the toggle only consumes it.
+    render(
+      <TodayPlanToggle
+        lang="en"
+        datasetVersion={0}
+        shared={{ payload: scenariosFixture, loading: false, error: null, notFound: false }}
+      />,
+    );
+    await flush();
+    await flush();
+
+    // ⑯ never a second identical POST.
+    expect(fetchMock).not.toHaveBeenCalled();
+    const anchor = document.querySelector('[data-testid="toggle-anchor"]')?.textContent ?? "";
+    expect(anchor).toContain("26.9 %");
+    const today = document.querySelector('[data-testid="toggle-strategy-today"]')?.textContent ?? "";
+    expect(today).toContain("426,000 EUR");
+    // ⑦ per-year basis note from the API echo (fixture: 200 operating days).
+    const basis = document.querySelector('[data-testid="toggle-year-basis"]')?.textContent ?? "";
+    expect(basis).toContain("200 operating days");
+    expect(basis).toContain("[demo assumption]");
+  });
+
+  it("mirrors the shared loading state without fetching", () => {
+    const fetchMock = vi.fn(async () => jsonResponse(scenariosFixture as object, 200));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <TodayPlanToggle
+        lang="en"
+        datasetVersion={0}
+        shared={{ payload: null, loading: true, error: null, notFound: false }}
+      />,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="loading-state"]')?.textContent).toContain(
+      "Computing today-vs-plan",
+    );
+  });
+});
+
 describe("TodayPlanToggle — states", () => {
   it("shows the loading state first", async () => {
     stubScenarios(scenariosFixture);

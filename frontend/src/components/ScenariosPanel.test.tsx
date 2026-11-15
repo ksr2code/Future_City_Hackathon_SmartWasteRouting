@@ -143,6 +143,16 @@ describe("ScenariosPanel — results (§6 cost + service together)", () => {
     expect(baseline).toContain("523"); // truck-days
     expect(baseline).toContain("26.9 %"); // observed anchor beside cost (§6)
     expect(baseline).toContain("observed × representative time model");
+    // M18 ①: the baseline service level is OBSERVED — "emptying records"
+    // vocabulary, never "simulated emptying events" (§6).
+    expect(baseline).toContain("Emptying records full-or-overfull [observed]");
+    expect(baseline).not.toContain("Simulated emptying events");
+    // M18 ⑦: per-year basis note (365-day calendar vs {days} operating days,
+    // days from the API echo — 200 in the fixture).
+    const yearBasis = document.querySelector('[data-testid="scenarios-year-basis"]')?.textContent ?? "";
+    expect(yearBasis).toContain("365-day year");
+    expect(yearBasis).toContain("200 operating days");
+    expect(yearBasis).toContain("[demo assumption]");
     const cards = document.querySelectorAll('[data-testid="scenarios-baseline"], [data-testid="scenarios-strategy-spread"]');
     expect(cards).toHaveLength(2);
 
@@ -178,6 +188,12 @@ describe("ScenariosPanel — results (§6 cost + service together)", () => {
     expect(basis).toContain("plan simulated");
     // Derived spike stat from the response (fixture max = 1,303).
     expect(document.body.textContent).toContain("1,303 collections");
+    // M18 ⑮: §5.2.5 v5 observed visit counts render as their own [observed]
+    // timeline row (fixture has 3 observed_days entries) — never folded into
+    // the simulated strategies' bars.
+    const observedRow = document.querySelector('[data-testid="timeline-observed-row"]');
+    expect(observedRow).not.toBeNull();
+    expect(observedRow?.textContent).toContain("Observed visits [observed]");
   });
 
   it("degrades to an error state on a malformed scenarios payload", async () => {

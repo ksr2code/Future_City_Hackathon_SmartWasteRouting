@@ -460,6 +460,13 @@ export function Overview({
     moneyValid !== null && isFiniteNumber(moneyValid.observed_anchor.share_full_or_overfull_pct)
       ? `${moneyValid.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
       : null;
+  // ⑦ per-year basis for the money story: strategy EUR/year rows annualise on
+  // the API's operating_days_per_year [demo assumption] — taken from the echo,
+  // never hardcoded.
+  const moneyOperatingDays =
+    moneyValid !== null && isFiniteNumber(moneyValid.config_echo.operating_days_per_year)
+      ? moneyValid.config_echo.operating_days_per_year
+      : null;
   const moneySavedEur =
     moneyBaseline !== null &&
     moneySpread !== null &&
@@ -556,9 +563,7 @@ export function Overview({
             {sweepAll !== null && optimised !== null ? (
               <>
                 {t(lang, "overview.keynum.distance.fixed")}: {formatMetres(sweepAll.distance_m)} ·{" "}
-                {t(lang, "overview.keynum.distance.optimised")}: {formatMetres(optimised.distance_m)}{" "}
-                · {t(lang, "unit.vehicles")}: {sweepAll.recommended_trucks} →{" "}
-                {optimised.recommended_trucks}
+                {t(lang, "overview.keynum.distance.optimised")}: {formatMetres(optimised.distance_m)}
                 {savingsPct !== null ? (
                   <span className="mt-1 block">
                     {tf(lang, "overview.keynum.distance.savings", {
@@ -718,7 +723,9 @@ export function Overview({
                     reason: t(lang, `overview.reason.${c.reason_code}` as TranslationKey),
                   })),
                 ]}
-                emptyLabel={t(lang, "overview.state.recommendationError")}
+                // Real empty label (M18): an empty example list is a state fact
+                // ("nothing to empty"), never the recommendation error text.
+                emptyLabel={t(lang, "overview.recommendation.none")}
               />
               <p className="text-xs leading-relaxed text-slate-500">
                 {t(lang, "overview.recommendation.caption")}
@@ -761,7 +768,7 @@ export function Overview({
                     {moneyBaseline.cost_eur_total.toLocaleString("en-US")} EUR
                   </p>
                   <p className="mt-0.5 text-xs font-semibold text-sky-900">
-                    {t(lang, "overview.toggle.serviceFull")}:{" "}
+                    {t(lang, "overview.toggle.serviceObserved")}:{" "}
                     {moneyAnchorPct ?? "— %"}{" "}
                     <span className="font-normal text-slate-500">
                       ({t(lang, "overview.money.observedServiceBasis")})
@@ -856,6 +863,17 @@ export function Overview({
                 </div>
               </div>
 
+              {/* ⑦ per-year basis note: the two EUR/year rows annualise on
+                  DIFFERENT bases (observed: 365-day calendar scaling; plan:
+                  {days} operating days from the API echo) — labelled, §4.8. */}
+              {moneyOperatingDays !== null ? (
+                <p className="text-xs leading-relaxed text-slate-500" data-testid="money-year-basis">
+                  {tf(lang, "overview.money.yearBasis", {
+                    days: moneyOperatingDays.toLocaleString("en-US"),
+                  })}
+                </p>
+              ) : null}
+
               {moneySavedEur !== null && moneySavedPct !== null ? (
                 <p className="text-sm font-semibold text-emerald-800" data-testid="money-savings">
                   {tf(lang, "overview.money.saved", {
@@ -872,9 +890,21 @@ export function Overview({
         </section>
       ) : null}
 
-      {/* Today ↔ with-our-plan toggle: cost + service always together (§6, W1/W2) */}
+      {/* Today ↔ with-our-plan toggle: cost + service always together (§6, W1/W2).
+          ⑯ one shared /api/scenarios fetch: the money story above owns the call
+          and the toggle consumes its result — never two identical POSTs. */}
       {!summaryLoading && summaryError === null && hasDataset ? (
-        <TodayPlanToggle lang={lang} datasetVersion={datasetVersion} recalculateKey={recalculateKey} />
+        <TodayPlanToggle
+          lang={lang}
+          datasetVersion={datasetVersion}
+          recalculateKey={recalculateKey}
+          shared={{
+            payload: moneyScenarios,
+            loading: moneyLoading,
+            error: moneyError,
+            notFound: moneyNotFound,
+          }}
+        />
       ) : null}
 
       {/* How it works — static, shown even before data is loaded */}
@@ -955,7 +985,7 @@ export function Overview({
                 ]}
               />
               <ComparisonStep
-                index={1}
+                index={2}
                 title={t(lang, "overview.compare.step1.title")}
                 rows={[
                   [t(lang, "col.distance"), formatMetres(sweepAll.distance_m)],
@@ -977,7 +1007,7 @@ export function Overview({
                 ]}
               />
               <ComparisonStep
-                index={2}
+                index={3}
                 title={t(lang, "overview.compare.step2.title")}
                 rows={[
                   [t(lang, "col.distance"), formatMetres(sweepSelected.distance_m)],
@@ -1019,7 +1049,7 @@ export function Overview({
                 )}
               </ComparisonStep>
               <ComparisonStep
-                index={3}
+                index={4}
                 title={
                   determinism !== null
                     ? `${t(lang, "overview.compare.step3.title")} (${tf(lang, "overview.compare.step3.medianSuffix", { runs: determinism.runs })})`
@@ -1045,8 +1075,16 @@ export function Overview({
                 ]}
               >
                 {gains !== null && gains.routing_gain_m !== null ? (
-                  <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-routing-gain">
+                  <p
+                    className={`text-xs font-semibold ${
+                      gains.routing_gain_m < 0 ? "text-amber-700" : "text-emerald-700"
+                    }`}
+                    data-testid="comparison-routing-gain"
+                  >
                     {tf(lang, "overview.compare.routingGain", { gain: formatGain(gains.routing_gain_m) })}
+                    {gains.routing_gain_m < 0 ? (
+                      <> {t(lang, "overview.compare.totalGainNegative")}</>
+                    ) : null}
                   </p>
                 ) : (
                   <p className="text-xs text-slate-500" data-testid="comparison-routing-gain">
@@ -1054,8 +1092,16 @@ export function Overview({
                   </p>
                 )}
                 {gains !== null && gains.total_gain_m !== null ? (
-                  <p className="text-xs font-semibold text-emerald-700" data-testid="comparison-total-gain">
+                  <p
+                    className={`text-xs font-semibold ${
+                      gains.total_gain_m < 0 ? "text-amber-700" : "text-emerald-700"
+                    }`}
+                    data-testid="comparison-total-gain"
+                  >
                     {tf(lang, "overview.compare.totalGain", { gain: formatGain(gains.total_gain_m) })}
+                    {gains.total_gain_m < 0 ? (
+                      <> {t(lang, "overview.compare.totalGainNegative")}</>
+                    ) : null}
                   </p>
                 ) : null}
               </ComparisonStep>
@@ -1073,34 +1119,37 @@ export function Overview({
                 {tf(lang, "overview.compare.savings", { pct: `${savingsPct.toFixed(1)} %` })}
               </p>
             ) : null}
-            {fleetBudget !== null ? (
-              <div
-                className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
-                data-testid="fleet-budget"
-              >
-                <p className="text-sm font-semibold text-slate-800">
-                  {t(lang, "overview.fleetBudget.title")}
-                </p>
-                <dl className="mt-1 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">{t(lang, "col.trucks")}</dt>
-                    <dd className="text-right text-slate-800">
-                      {fleetBudget.trucks} {t(lang, "unit.vehicles")} ({fleetBudget.vehicle_type_id})
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perDay")}</dt>
-                    <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_day)}</dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perYear")}</dt>
-                    <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_year)}</dd>
-                  </div>
-                </dl>
-                <p className="mt-1 text-slate-500">{t(lang, "overview.fleetBudget.note")}</p>
-              </div>
-            ) : null}
             <TechDetails label={t(lang, "techdetails.label")} testid="comparison-tech-details">
+              {/* ④ §4.8 fleet separation: the solver-input fleet budget (×99
+                  [demo assumption]) is technical detail, not an operational
+                  headline — it lives in the collapsible, not on the card. */}
+              {fleetBudget !== null ? (
+                <div
+                  className="rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                  data-testid="fleet-budget"
+                >
+                  <p className="text-sm font-semibold text-slate-800">
+                    {t(lang, "overview.fleetBudget.title")}
+                  </p>
+                  <dl className="mt-1 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-slate-500">{t(lang, "col.trucks")}</dt>
+                      <dd className="text-right text-slate-800">
+                        {fleetBudget.trucks} {t(lang, "unit.vehicles")} ({fleetBudget.vehicle_type_id})
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perDay")}</dt>
+                      <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_day)}</dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-slate-500">{t(lang, "overview.fleetBudget.perYear")}</dt>
+                      <dd className="text-right text-slate-800">{formatEur(fleetBudget.cost_eur_per_year)}</dd>
+                    </div>
+                  </dl>
+                  <p className="mt-1 text-slate-500">{t(lang, "overview.fleetBudget.note")}</p>
+                </div>
+              ) : null}
               <p data-testid="comparison-statuses">
                 {comparisonValid !== null
                   ? comparisonValid.scenarios
