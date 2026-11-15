@@ -146,6 +146,12 @@ budget** [predicted] is 99 × 500 EUR = 49,500 EUR/day, × 200 operating
 days = 9,900,000 EUR/year — a derivation from the [representative] cost
 parameters, never an invoiced amount.
 
+Caveat: this sizing divides **total** volume/weight across all materials by
+the full vehicle capacity, while the solver enforces **per-material**
+compartments (one-third of vehicle volume each, §4.2) — a skewed material
+mix could therefore under-recommend trucks for the compartment-constrained
+problem (protocol choice, documented in contracts §4).
+
 ## 7. Comparison design (v4, contracts §4.7)
 
 Four scenarios isolate where improvement comes from; all share the §4.6
@@ -216,7 +222,9 @@ overflow (max fill exactly the 80 % trigger) yet **costs more** — its
 emptyings cluster onto shared peak days (rate-synchronised series come due
 together), so peak days need more trucks despite fewer total emptyings;
 `day_spread` keeps demand-driven timing but spreads due work across days,
-making it cheapest of the three **and** overflow-free — **−90,500 EUR
+making it cheapest of the three **and** overflow-free by construction — the
+due trigger plus the same-day guard never accept a state above 100 % (§4.8;
+the 88.9 % max fill is the emergent closeness measure) — **−90,500 EUR
 (−34.6 %, derived) vs the observed baseline with better service**.
 Annualisation bases differ by contract (§5.2.6): strategy per-year figures
 use the 200 operating days × window ratio, the baseline's per-year figure
@@ -265,8 +273,10 @@ rules [predicted — simulation on observed rates]:
   does not apply here.
 
 Live result (2026-11-15): 9,237 stops, **342 truck-days → 171,000 EUR**,
-peak 1 truck/day, typical 1.0, overflow 0.0 %, max fill 88.9 % — the
-money story of slide 5. Pure function of dataset + config (no solver, no
+peak 1 truck/day, typical 1.0, overflow 0.0 % (by construction — the due
+trigger + same-day guard never accept a fill above 100 %, §4.8), max fill
+88.9 % (the emergent closeness measure) — the money story of slide 5. Pure
+function of dataset + config (no solver, no
 RNG); the baseline column is the same arithmetic applied to the observed
 schedule.
 

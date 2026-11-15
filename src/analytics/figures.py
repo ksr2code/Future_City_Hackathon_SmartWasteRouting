@@ -115,7 +115,8 @@ def _delta_vs_gap_scatter(
     ax.set_ylabel("fill delta (percentage points)")
     ax.set_title(
         f"Numeric fill delta (percentage points) vs gap (days), {period}, "
-        f"n={len(numeric_pairs)} pairs; reading semantics unresolved (no causal claim)"
+        f"n={len(numeric_pairs)} pairs; semantics: one row = one emptying event "
+        f"(contracts §1.5, representative-stated; no causal claim)"
     )
     return _save(fig, out_dir, "fig_delta_vs_gap_scatter.png")
 

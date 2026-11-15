@@ -54,7 +54,9 @@ function formatEur(value: number | null | undefined): string {
  */
 function deferredReasonKey(reason: string): TranslationKey | null {
   if (reason.includes("no feasible insertion")) return "routing.reason.noInsertion";
-  if (reason === "hosted_demo_stop_cap") return "routing.reason.hostedCap";
+  // Live backend emits a prefixed SENTENCE ("hosted_demo_stop_cap: deployment
+  // setting…", src/api/services.py) — prefix-match, not equality.
+  if (reason.startsWith("hosted_demo_stop_cap")) return "routing.reason.hostedCap";
   if (reason.startsWith("fleet_exhausted")) return "routing.reason.fleetExhausted";
   if (reason.startsWith("collected volume")) return "routing.reason.volume";
   if (reason.startsWith("collected weight")) return "routing.reason.weight";

@@ -1,23 +1,33 @@
 import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import type { SimulationDay } from "../../lib/api";
-import { t, type Lang } from "../../lib/i18n";
+import { t, tf, type Lang } from "../../lib/i18n";
 
 /**
- * "The trap" (§5.2.5 replay): daily truck-days of the modelled 28-day cycle
- * (spiky mega-days) vs the naive same-day demand-driven strategy (clustering).
- * PURE: merges both day series by index from the props — never fetches, never
- * fabricates a daily series. Fixed Recharts size for jsdom tests.
+ * "The trap" (§5.2.5 replay): daily truck-days of the modelled fixed emptying
+ * cycle (spiky mega-days) vs the naive same-day demand-driven strategy
+ * (clustering). The cycle length in the legend comes from the API config
+ * echo via the `cycleDays` prop (review finding 4 — never hardcoded 28);
+ * missing → number-free fallback label. PURE: merges both day series by
+ * index from the props — never fetches, never fabricates a daily series.
+ * Fixed Recharts size for jsdom tests.
  */
 export function TrapTruckDaysChart({
   lang,
   fixedDays,
   demandDays,
+  cycleDays = null,
 }: {
   lang: Lang;
   fixedDays: SimulationDay[];
   demandDays: SimulationDay[];
+  /** Frequency_days from the API config echo, pre-formatted; null when unknown. */
+  cycleDays?: string | null;
 }) {
+  const fixedLabel =
+    cycleDays !== null && cycleDays !== ""
+      ? tf(lang, "overview.toggle.today", { days: cycleDays })
+      : t(lang, "overview.toggle.todayNoDays");
   const rows = useMemo(
     () =>
       fixedDays.map((d, i) => ({
@@ -37,7 +47,7 @@ export function TrapTruckDaysChart({
         <Line
           type="monotone"
           dataKey="fixed"
-          name={t(lang, "overview.toggle.today")}
+          name={fixedLabel}
           stroke="#f59e0b"
           dot={false}
           isAnimationActive={false}
@@ -53,7 +63,7 @@ export function TrapTruckDaysChart({
       </LineChart>
       <p className="mt-1 text-xs text-slate-500">
         <span className="font-semibold text-amber-700">—</span>{" "}
-        {t(lang, "overview.toggle.today")} ·{" "}
+        {fixedLabel} ·{" "}
         <span className="font-semibold text-sky-700">—</span>{" "}
         {t(lang, "charts.trap.legendDemand")}
       </p>

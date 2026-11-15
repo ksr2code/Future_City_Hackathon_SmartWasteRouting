@@ -120,7 +120,10 @@ const en = {
   "overview.toggle.title": "Today vs. with our plan",
   "overview.toggle.subtitle":
     "Cost is always shown with its service level — the plan that costs less is not automatically better (§6).",
-  "overview.toggle.today": "Modelled 28-day cycle [demo assumption]",
+  "overview.toggle.today": "Modelled {days}-day cycle [demo assumption]",
+  // Fail-safe when no config echo is available yet (pre-load / no dataset):
+  // number-free, never invents the default 28 (review finding 4).
+  "overview.toggle.todayNoDays": "Modelled fixed emptying cycle [demo assumption]",
   "overview.toggle.plan": "Demand-driven, same-day (no spacing)",
   // NOTE: `overview.toggle.plan` is still consumed as the ScenariosPanel
   // naive demand-driven card title (trap narrative — do NOT repurpose it).
@@ -289,7 +292,7 @@ const en = {
   "planning.tech.rate":
     "Fill-speed trend (rate): the predicted fill grows by the series' median fill speed between emptyings.",
   "planning.tech.evaluation":
-    "Evaluation on the real dataset: persistence beats rate — test MAE 22.8 vs 25.8 percentage points [evaluation on real data].",
+    "Evaluation on the real dataset: rate beats persistence — test MAE 20.1 vs 22.8 percentage points [evaluation on real data].",
   "planning.tech.autoNote":
     "The estimates above were fetched automatically with the dataset's last record date, a 28-day horizon and the persistence method.",
 
@@ -551,7 +554,8 @@ const de: Record<TranslationKey, string> = {
   "overview.toggle.title": "Heute vs. mit unserem Plan",
   "overview.toggle.subtitle":
     "Kosten werden immer zusammen mit dem Serviceniveau gezeigt — billiger heißt nicht automatisch besser (§6).",
-  "overview.toggle.today": "Modellierter 28-Tage-Zyklus [Demo-Annahme]",
+  "overview.toggle.today": "Modellierter {days}-Tage-Zyklus [Demo-Annahme]",
+  "overview.toggle.todayNoDays": "Modellierter fester Leerungszyklus [Demo-Annahme]",
   "overview.toggle.plan": "Bedarfsorientiert, gleicher Tag (ohne Staffelung)",
   // NOTE: `overview.toggle.plan` is still consumed as the ScenariosPanel
   // naive demand-driven card title (trap narrative — do NOT repurpose it).
@@ -720,7 +724,7 @@ const de: Record<TranslationKey, string> = {
   "planning.tech.rate":
     "Füllgeschwindigkeit (Rate): der prognostizierte Füllstand wächst um die mittlere Füllgeschwindigkeit der Serie zwischen Leerungen.",
   "planning.tech.evaluation":
-    "Bewertung am echten Datensatz: Persistence schlägt Rate — Test-MAE 22,8 vs. 25,8 Prozentpunkte [Bewertung an echten Daten].",
+    "Bewertung am echten Datensatz: Rate schlägt Persistence — Test-MAE 20,1 vs. 22,8 Prozentpunkte [Bewertung an echten Daten].",
   "planning.tech.autoNote":
     "Die Schätzungen oben wurden automatisch mit dem letzten Daten-Zeitpunkt des Datensatzes, einem 28-Tage-Horizont und der Persistence-Methode abgerufen.",
 

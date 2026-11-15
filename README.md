@@ -128,13 +128,14 @@ keys are required for the core demo.
 
 ## Documentation
 
+- `docs/how_it_works.md` — plain-language explainer: pipeline, prediction, routing, honest limits (for jury, city officials and technical partners)
 - `docs/user_guide.md` — user guide (deliverable 4): setup/run/test/demo, screens, architecture, limitations
 - `docs/routing_methodology.md` — distance provenance, solver setup, fleet sizing, comparison + scenario engine, days-to-full
 - `docs/data_profile.md` — data dictionary / source audit
 - `docs/contracts.md` — cross-module contracts (wire format authority)
 - `docs/demo_numbers.md` — reproducible comparison + scenario-engine numbers
 - `docs/model_card.md` — forecast model card
-- `docs/open_questions.md` — host inputs still awaited, with current labelled defaults (Q1–Q11)
+- `docs/open_questions.md` — host inputs still awaited, with current labelled defaults (Q1–Q12)
 
 ## Data
 

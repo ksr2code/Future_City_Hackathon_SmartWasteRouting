@@ -102,3 +102,8 @@ Sun 0.4.
 §13.1 reading semantics (gates M5 target definition) · BW school vacation
 dates (external input needed) · Jun–Aug 2026 driver · coordinates/depot/fleet
 absent (M8 must source or label demo assumptions) · overfull semantics (§13.2).
+
+[Update 2026-11-15: the §13.1 semantics item is since stated per contracts
+§1.5 (v4, representative-stated) — one row = one emptying event, fill observed
+at that emptying; see data_profile §13.1. The analyses above predate this
+resolution and stand as recorded.]

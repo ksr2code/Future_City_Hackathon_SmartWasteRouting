@@ -7,10 +7,10 @@ Builds behavioural features per glass-fill series (`Location_id` x
 - fill deltas and a *fill-rate proxy* (percentage points per day) only over
   consecutive numeric-numeric reading pairs; `overfull` (fill None) breaks a
   pair and is never coerced to a number (contract §1.1 non-decision);
-- reading semantics are unresolved (docs/data_profile.md §13.1): whether an
-  increase means accumulation and a decrease means a collection is a
-  *hypothesis*, not a fact. Everything here is descriptive; no causal claim is
-  made anywhere in this module.
+- semantics per contracts §1.5 (v4, representative-stated): one row is one
+  emptying event, and fill_level_perc is the fill observed at that emptying
+  (docs/data_profile.md §13.1; written confirmation pending). Everything here
+  is descriptive; no causal claim is made anywhere in this module.
 
 Deterministic and order-independent: readings are sorted by series key and
 date internally, so results do not depend on source row order.
@@ -198,7 +198,7 @@ def _series_pairs(ordered: list[ReadingRecord]) -> list[tuple[float, float]]:
 def collect_numeric_pairs(readings: list[ReadingRecord]) -> list[tuple[int, float, float]]:
     """All numeric-numeric consecutive pairs dataset-wide: (gap_days, delta_pct, rate).
 
-    Descriptive only — see module docstring on unresolved reading semantics.
+    Descriptive only — see module docstring on reading semantics.
     """
     ordered_by_series: dict[tuple[str, MaterialType], list[ReadingRecord]] = {}
     for reading in readings:

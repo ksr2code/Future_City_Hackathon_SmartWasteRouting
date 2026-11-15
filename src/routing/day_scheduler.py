@@ -33,12 +33,16 @@ skipped with their §5.2.3 reason — never silently dropped.
   container-days share, share full/overfull at emptying, max end-of-day
   fill) plus deferral explainers (deferral events, longest wait).
 
-By construction the scheduler never lets a DUE series exceed 100 % (a
-deferral requires next-day fill <= 100, and the overflow guard serves the
-rest the same day), so counted overflow container-days are 0 unless a
-caller-seeded prior clock is already past full — such a fill surfaces in the
-metrics on its first day and the series is served that same day
-(``fill > 100 => fill + rate > 100``).
+Counted overflow container-days are 0 **by construction**, not an emergent
+result (§4.8 "overflow is never accepted"): a deferral requires next-day
+fill <= 100 %, and the overflow guard serves the rest the same day, so no
+accepted end-of-day state exceeds 100 %; ``max_fill_pct`` is the emergent
+closeness-to-limit measure. End-of-day fills are measured AFTER the service
+reset, so a caller-seeded prior clock already past full never enters
+``overflow_containers``/``max_fill_pct`` — it surfaces only in the
+emptying-based metrics (``fills_at_emptying``,
+``share_emptyings_full_or_overfull_pct``) on its first day, and the series
+is served that same day (``fill > 100 => fill + rate > 100``).
 
 All outputs are **[predicted — simulation on observed rates]**; the baseline
 column is :func:`src.routing.observed_baseline.estimate_observed_trucks`
@@ -277,7 +281,9 @@ def schedule_collection_days(
             deferrals_total += 1
             pending_since.setdefault(key, day)
 
-        # 4) End-of-day service level over every active series (§5.2.4).
+        # 4) End-of-day service level over every active series (§5.2.4);
+        # measured AFTER the service reset (step 3), so a seeded past-full
+        # fill is reset before this and never counted here.
         overflow_today = 0
         for key, rate in rate_of.items():
             end_of_day_fill = max(0.0, rate * (day - last_emptying[key]).days)

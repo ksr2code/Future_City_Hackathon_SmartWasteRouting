@@ -266,7 +266,16 @@ export function TodayPlanToggle({
     }
   }
 
-  const toggleButton = (target: Side, labelKey: TranslationKey, testid: string) => (
+  // Review finding 4: the today-side label parameterises with the run's
+  // frequency_days from the API config echo (M18 {days} convention); when no
+  // echo is available yet (pre-load / 404) the number-free fallback renders —
+  // the default 28 is never invented.
+  const cycleDays =
+    scenarios !== null && isFiniteNumber(scenarios.config_echo?.frequency_days)
+      ? scenarios.config_echo.frequency_days.toLocaleString("en-US")
+      : null;
+
+  const toggleButton = (target: Side, label: string, testid: string) => (
     <button
       key={target}
       type="button"
@@ -279,7 +288,7 @@ export function TodayPlanToggle({
           : "rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
       }
     >
-      {t(lang, labelKey)}
+      {label}
     </button>
   );
 
@@ -290,10 +299,16 @@ export function TodayPlanToggle({
         <p className="text-xs text-slate-500">{t(lang, "overview.toggle.subtitle")}</p>
       </div>
       <div className="mt-2 flex gap-2" role="group" aria-label={t(lang, "overview.toggle.title")}>
-        {toggleButton("today", "overview.toggle.today", "toggle-today")}
+        {toggleButton(
+          "today",
+          cycleDays !== null
+            ? tf(lang, "overview.toggle.today", { days: cycleDays })
+            : t(lang, "overview.toggle.todayNoDays"),
+          "toggle-today",
+        )}
         {/* §5.2.6: dedicated key — `overview.toggle.plan` stays the naive
             demand-driven wording (ScenariosPanel trap card title). */}
-        {toggleButton("plan", "overview.toggle.ourPlan", "toggle-plan")}
+        {toggleButton("plan", t(lang, "overview.toggle.ourPlan"), "toggle-plan")}
       </div>
 
       {scenariosLoading ? (

@@ -356,4 +356,31 @@ describe("TodayPlanToggle — states", () => {
     );
     expect(document.querySelector('[data-testid="error-state"]')).toBeNull();
   });
+
+  it("labels the today side with the echo's frequency_days (never hardcoded 28)", async () => {
+    // Review finding 4: the toggle label parameterises with the API echo.
+    stubScenarios(
+      { ...scenariosFixture, config_echo: { ...scenariosFixture.config_echo, frequency_days: 14 } },
+      200,
+    );
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    const label = document.querySelector('[data-testid="toggle-today"]')?.textContent ?? "";
+    expect(label).toContain("Modelled 14-day cycle [demo assumption]");
+    expect(label).not.toContain("28-day");
+  });
+
+  it("uses the number-free fallback label while the echo is unavailable (404, never invents 28)", async () => {
+    stubScenarios({ detail: "no dataset" }, 404);
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    const label = document.querySelector('[data-testid="toggle-today"]')?.textContent ?? "";
+    expect(label).toContain("Modelled fixed emptying cycle [demo assumption]");
+    expect(label).not.toContain("28");
+    expect(label).not.toContain("{days}");
+  });
 });

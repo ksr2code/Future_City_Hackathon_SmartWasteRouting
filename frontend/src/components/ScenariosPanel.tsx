@@ -100,17 +100,19 @@ function strategyById(
   return s !== undefined ? s : null;
 }
 
-/** One strategy cost+service block (§6: cost never alone). */
+/** One strategy cost+service block (§6: cost never alone). The title is a
+ *  pre-translated string: the fixed-frequency card parameterises with the
+ *  run's config-echo frequency_days at the call site (review finding 4). */
 function StrategyCard({
   lang,
   strategy,
   testid,
-  titleKey,
+  title,
 }: {
   lang: Lang;
   strategy: ScenarioStrategy;
   testid: string;
-  titleKey: TranslationKey;
+  title: string;
 }) {
   const service = strategy.service;
   const num = (v: number | null, digits = 1): string =>
@@ -118,7 +120,7 @@ function StrategyCard({
   return (
     <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2" data-testid={testid}>
       <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {t(lang, titleKey)}
+        {title}
       </p>
       <p className="mt-1 text-base font-bold text-slate-900">
         {strategy.cost_eur_total.toLocaleString("en-US")} EUR{" "}
@@ -238,13 +240,16 @@ function BaselineCard({ lang, baseline, anchorPct }: {
         <div className="flex justify-between gap-2">
           <dt>{t(lang, "scenarios.baseline.medianTrucks")}</dt>
           <dd className="font-semibold text-slate-800">
-            {baseline.median_trucks_per_active_day.toLocaleString("en-US")}
+            {/* §4.8: null iff no feasible active day → em-dash, never coerced. */}
+            {baseline.median_trucks_per_active_day !== null
+              ? baseline.median_trucks_per_active_day.toLocaleString("en-US")
+              : "—"}
           </dd>
         </div>
         <div className="flex justify-between gap-2">
           <dt>{t(lang, "scenarios.baseline.peakTrucks")}</dt>
           <dd className="font-semibold text-slate-800">
-            {baseline.peak_trucks.toLocaleString("en-US")}
+            {baseline.peak_trucks !== null ? baseline.peak_trucks.toLocaleString("en-US") : "—"}
           </dd>
         </div>
         <div className="flex justify-between gap-2">
@@ -494,19 +499,27 @@ export function ScenariosPanel({
                 lang={lang}
                 strategy={today}
                 testid="scenarios-strategy-fixed"
-                titleKey="overview.toggle.today"
+                /* Review finding 4: title tracks the run's config echo —
+                   never a hardcoded 28-day cycle. */
+                title={
+                  isFiniteNumber(scenarioData.config_echo?.frequency_days)
+                    ? tf(lang, "overview.toggle.today", {
+                        days: scenarioData.config_echo.frequency_days.toLocaleString("en-US"),
+                      })
+                    : t(lang, "overview.toggle.todayNoDays")
+                }
               />
               <StrategyCard
                 lang={lang}
                 strategy={plan}
                 testid="scenarios-strategy-demand"
-                titleKey="overview.toggle.plan"
+                title={t(lang, "overview.toggle.plan")}
               />
               <StrategyCard
                 lang={lang}
                 strategy={spread}
                 testid="scenarios-strategy-spread"
-                titleKey="scenarios.spreadLabel"
+                title={t(lang, "scenarios.spreadLabel")}
               />
             </div>
             {/* ⑦ per-year basis note: the baseline EUR/year is 365-day calendar

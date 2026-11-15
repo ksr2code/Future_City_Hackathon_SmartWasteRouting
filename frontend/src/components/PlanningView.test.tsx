@@ -172,8 +172,11 @@ describe("PlanningView — method labels + TechDetails", () => {
     expect(options).toContain("Fill-speed trend (rate)");
 
     // TechDetails: both method sentences + the honest evaluation numbers.
+    // v4 (docs/model_card.md): RATE beats persistence — test MAE 20.146 vs
+    // 22.764 pp; the stale pre-v4 direction (22.8 vs 25.8) must not render.
     const tech = document.querySelector('[data-testid="tech-details"]')?.textContent ?? "";
-    expect(tech).toContain("test MAE 22.8 vs 25.8 percentage points");
+    expect(tech).toContain("rate beats persistence — test MAE 20.1 vs 22.8 percentage points");
+    expect(tech).not.toContain("22.8 vs 25.8");
     expect(tech).toContain("[evaluation on real data]");
   });
 
@@ -190,7 +193,9 @@ describe("PlanningView — method labels + TechDetails", () => {
     expect(options).toContain("Zuletzt gemessener Stand hält (Persistence)");
     expect(options).toContain("Füllgeschwindigkeits-Trend (Rate)");
     const tech = document.querySelector('[data-testid="tech-details"]')?.textContent ?? "";
-    expect(tech).toContain("Test-MAE 22,8 vs. 25,8 Prozentpunkte");
+    // v4: Rate schlägt Persistence (Modellkarte, Test-Split 20,146 vs 22,764).
+    expect(tech).toContain("Rate schlägt Persistence — Test-MAE 20,1 vs. 22,8 Prozentpunkte");
+    expect(tech).not.toContain("22,8 vs. 25,8");
     expect(tech).toContain("[Bewertung an echten Daten]");
   });
 });

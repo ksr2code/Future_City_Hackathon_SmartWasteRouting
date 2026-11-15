@@ -573,6 +573,38 @@ describe("Overview — §5.2.6 money story card", () => {
     expect(savings).toContain("derived");
   });
 
+  it("renders — for a null baseline peak_trucks while the card stays visible (§5.2.6 nullable)", async () => {
+    // Wire truth (src/api/schemas.py): peak_trucks is `int | None`. The
+    // Overview money card must keep rendering (median still finite) and show
+    // an em-dash for the null peak instead of crashing.
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/scenarios": () =>
+        jsonResponse({
+          ...scenariosFixture,
+          observed_baseline: { ...scenariosFixture.observed_baseline, peak_trucks: null },
+        }),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const baseline = document.querySelector('[data-testid="money-baseline"]')?.textContent ?? "";
+    expect(baseline).toContain("261,500 EUR"); // card still renders
+    expect(baseline).toContain("(median)2"); // finite median unchanged
+    expect(baseline).toContain("Peak trucks—"); // null peak → em-dash, no crash
+    expect(baseline).not.toContain("NaN");
+  });
+
   it("renders the money story in German with parity", async () => {
     stubRoutes(happyRoutes());
     render(
@@ -759,6 +791,35 @@ describe("Overview — §6 v5 story charts (presentation→Overview restructure)
     expect(outcomes).toContain("0.0 % simulated overflow");
     expect(outcomes).toContain("anchor 26.9 % [observed]");
     expect(outcomes).toContain("never a measured saving");
+  });
+
+  it("titles the trap chart from the simulation echo's frequency_days (never hardcoded 28)", async () => {
+    // Review finding 4: Overview wires the simulation config echo into the
+    // chart legend — an echo of 14 must render, not a stale 28.
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/simulation": () =>
+        jsonResponse({
+          ...simulationFixture,
+          config_echo: { ...simulationFixture.config_echo, frequency_days: 14 },
+        }),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const trap = document.querySelector('[data-testid="story-trap"]')?.textContent ?? "";
+    expect(trap).toContain("Modelled 14-day cycle [demo assumption]");
+    expect(trap).not.toContain("28-day");
   });
 
   it("shows the simulation loading state, then the empty note on 404 (§5.3)", async () => {

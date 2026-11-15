@@ -463,6 +463,18 @@ Status quo and service level (v4, user-approved 2026-11-14):
     day) and peak trucks, the active-days-per-week pattern, and the §5.2.4
     service metrics (overflow container-days, share full/overfull at emptying,
     max fill) beside every cost figure (§6).
+  - Arithmetic-divergence note (added 2026-11-15 review): the baseline
+    per-truck inequality reduces to `t = ceil(visits × (service+travel) /
+    (shift − 2×travel − disposal))` — ⌈15v/430⌉ at defaults — while the
+    scheduler fixes integer `stops_per_truck_day = floor(430/15) = 28` and
+    computes ⌈v/28⌉. The floor makes the scheduler count one truck **more**
+    than the baseline formula on days whose volume falls in the fractional
+    band (e.g. v = 57: baseline 2, scheduler 3), so the headline
+    baseline-vs-day-spread comparison mixes slightly different arithmetic.
+    Direction is conservative: day-spread cost is overstated relative to an
+    identical-arithmetic comparison, i.e. the −35 % saving errs low, not high.
+    Both share the same time model (15 min/visit incl. one leg, 430 usable
+    minutes).
   - Determinism: pure function of dataset + config, no solver, no RNG. All
     outputs labelled [predicted — simulation on observed rates]; the baseline
     column is the observed schedule through the same arithmetic

@@ -51,7 +51,9 @@ pending]. The app answers five questions:
    261,500 EUR over the observed window [observed × representative time
    model]. The day-spreading plan (§4.8) delivers the same service level or
    better for 342 truck-days ≈ 171,000 EUR — ≈ 90,500 EUR (−34.6 %, derived)
-   with zero overflow.
+   with zero overflow — by construction: the §4.8 due trigger plus same-day
+   guard never accept a fill above 100 % (max fill 88.9 % is the emergent
+   closeness measure).
 
 There is one active dataset in memory; uploading replaces it.
 
@@ -84,8 +86,8 @@ Checks (same as `.github/workflows/ci.yml`; all green on the v5 tree,
 ```bash
 .venv/bin/ruff check .        # lint (use the venv binary — plain `ruff` may not be on PATH)
 .venv/bin/mypy src            # strict type check → 0 issues in 42 files
-.venv/bin/pytest              # backend tests → 639 passed
-npm --prefix frontend test    # Vitest → 111 passed (21 files)
+.venv/bin/pytest              # backend tests → 641 passed
+npm --prefix frontend test    # Vitest → 139 passed (20 files)
 npm --prefix frontend run build
 ```
 
@@ -117,7 +119,8 @@ example reasons and the as-of date), a how-it-works strip, the
 **money-story card** (M17): today's observed schedule vs the day-spreading
 plan — 523 → 342 truck-days, 261,500 → 171,000 EUR over the observed window,
 ≈ 90,500 EUR lower (−34.6 % cost, derived from the API responses) with
-better service (plan overflow 0.0 %, max fill 88.9 %; observed anchor 26.9 %
+better service (plan overflow 0.0 % by construction [§4.8], max fill
+88.9 %; observed anchor 26.9 %
 of emptying records full/overfull [observed]). Labels: baseline
 [observed × representative time model], plan [predicted — simulation on
 observed rates].
@@ -259,8 +262,10 @@ trigger) yet **costs more** — its emptyings cluster onto shared peak days
 (rate-synchronised series come due together), so peak days need more trucks
 despite fewer total emptyings. `day_spread` keeps demand-driven timing but
 spreads due work across days, making it the cheapest of the three **and**
-overflow-free — **≈ 90,500 EUR (−34.6 %, derived) below the observed
-baseline with better service**. The UI always shows cost with service; a
+overflow-free by construction (due trigger + same-day guard never accept a
+state above 100 %, §4.8; max fill 88.9 % is the emergent closeness measure)
+— **≈ 90,500 EUR (−34.6 %, derived) below the observed baseline with better
+service**. The UI always shows cost with service; a
 strategy that lowers cost while worsening service is visibly flagged, and
 cost is never shown alone. The timeline chart carries the **mega-day note**:
 series without pre-window history start at fill 0 on the same day, so the
@@ -282,7 +287,8 @@ truck-days / 520,000 EUR vs fixed-cycle 852 / 426,000 EUR [live
 `POST /api/scenarios`]) → **money story** (523 truck-days / 261,500 EUR
 [observed × representative time model] → 342 / 171,000 EUR [predicted —
 simulation on observed rates]; ≈ 90,500 EUR lower, −34.6 % derived, plan
-overflow 0.0 % vs the 26.9 % anchor [observed]) → **outcomes strip** (cost
+overflow 0.0 % (by construction, §4.8) vs the 26.9 % anchor [observed]) →
+**outcomes strip** (cost
 and service badges together, §6) → **four-step comparison card** (§3.1).
 Every chart keeps its [observed] / [predicted] / [demo assumption] labels;
 sections read the **live API** under normal loading/empty/error conventions

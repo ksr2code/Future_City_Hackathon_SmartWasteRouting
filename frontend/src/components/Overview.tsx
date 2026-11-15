@@ -547,6 +547,12 @@ export function Overview({
   const simValid = validSimulation(simulation);
   const simTrapFixed = simValid?.strategies.find((s) => s.id === "fixed_frequency")?.days ?? [];
   const simTrapDemand = simValid?.strategies.find((s) => s.id === "demand_driven")?.days ?? [];
+  // Review finding 4: trap-chart legend length from the API config echo —
+  // never a hardcoded 28 (null → chart's number-free fallback label).
+  const simCycleDays =
+    simValid !== null && isFiniteNumber(simValid.config_echo?.frequency_days)
+      ? simValid.config_echo.frequency_days.toLocaleString("en-US")
+      : null;
   // W3 tanks: per-material filling times from the §5.2.3 v2 payload.
   const statsByMaterial = validStatsByMaterial(daysToFull);
   const maxMedianDays =
@@ -852,7 +858,12 @@ export function Overview({
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="story-trap">
           <h3 className="text-base font-semibold text-slate-900">{t(lang, "charts.trap.title")}</h3>
           <div className="mt-3">
-            <TrapTruckDaysChart lang={lang} fixedDays={simTrapFixed} demandDays={simTrapDemand} />
+            <TrapTruckDaysChart
+              lang={lang}
+              fixedDays={simTrapFixed}
+              demandDays={simTrapDemand}
+              cycleDays={simCycleDays}
+            />
           </div>
         </section>
       ) : null}
@@ -907,13 +918,21 @@ export function Overview({
                     <div className="flex justify-between gap-2">
                       <dt>{t(lang, "overview.money.medianTrucks")}</dt>
                       <dd className="font-semibold text-slate-800">
-                        {moneyBaseline.median_trucks_per_active_day.toLocaleString("en-US")}
+                        {/* §4.8 nullable; the card-level guard already hides the
+                            card on a non-finite median — this null check satisfies
+                            the type and degrades to an em-dash, never coerced. */}
+                        {moneyBaseline.median_trucks_per_active_day !== null
+                          ? moneyBaseline.median_trucks_per_active_day.toLocaleString("en-US")
+                          : "—"}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-2">
                       <dt>{t(lang, "overview.money.peakTrucks")}</dt>
                       <dd className="font-semibold text-slate-800">
-                        {moneyBaseline.peak_trucks.toLocaleString("en-US")}
+                        {/* §4.8 nullable: null peak → em-dash (no feasible day). */}
+                        {moneyBaseline.peak_trucks !== null
+                          ? moneyBaseline.peak_trucks.toLocaleString("en-US")
+                          : "—"}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-2">

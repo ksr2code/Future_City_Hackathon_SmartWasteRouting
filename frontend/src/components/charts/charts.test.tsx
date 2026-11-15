@@ -99,7 +99,16 @@ describe("TrapTruckDaysChart — the clustering trap, [predicted]", () => {
   it("renders both replay series with legend + basis labels", () => {
     const fixed = simulationFixture.strategies.find((s) => s.id === "fixed_frequency")!.days;
     const demand = simulationFixture.strategies.find((s) => s.id === "demand_driven")!.days;
-    render(<TrapTruckDaysChart lang="en" fixedDays={fixed} demandDays={demand} />);
+    // cycleDays comes from the API config echo (28 in the fixture) — same
+    // wiring the Overview uses; the label is parameterised, never hardcoded.
+    render(
+      <TrapTruckDaysChart
+        lang="en"
+        fixedDays={fixed}
+        demandDays={demand}
+        cycleDays={simulationFixture.config_echo.frequency_days.toLocaleString("en-US")}
+      />,
+    );
     const chart = document.querySelector('[data-testid="chart-trap"]');
     expect(chart).not.toBeNull();
     // Legend: fixed cycle reuses the today-label vocabulary; demand line has
@@ -109,10 +118,37 @@ describe("TrapTruckDaysChart — the clustering trap, [predicted]", () => {
     expect(chart?.textContent).toContain("Simulation based on historical rates");
   });
 
+  it("titles the fixed-cycle legend with the cycleDays prop (never hardcoded 28)", () => {
+    const fixed = simulationFixture.strategies.find((s) => s.id === "fixed_frequency")!.days;
+    const demand = simulationFixture.strategies.find((s) => s.id === "demand_driven")!.days;
+    render(<TrapTruckDaysChart lang="en" fixedDays={fixed} demandDays={demand} cycleDays="14" />);
+    const chart = document.querySelector('[data-testid="chart-trap"]');
+    expect(chart?.textContent).toContain("Modelled 14-day cycle [demo assumption]");
+    expect(chart?.textContent).not.toContain("28-day");
+    expect(chart?.textContent).not.toContain("{days}");
+  });
+
+  it("falls back to the number-free label when cycleDays is missing (never invents 28)", () => {
+    const fixed = simulationFixture.strategies.find((s) => s.id === "fixed_frequency")!.days;
+    const demand = simulationFixture.strategies.find((s) => s.id === "demand_driven")!.days;
+    render(<TrapTruckDaysChart lang="en" fixedDays={fixed} demandDays={demand} />);
+    const chart = document.querySelector('[data-testid="chart-trap"]');
+    expect(chart?.textContent).toContain("Modelled fixed emptying cycle [demo assumption]");
+    expect(chart?.textContent).not.toContain("28");
+    expect(chart?.textContent).not.toContain("{days}");
+  });
+
   it("renders German labels with parity", () => {
     const fixed = simulationFixture.strategies.find((s) => s.id === "fixed_frequency")!.days;
     const demand = simulationFixture.strategies.find((s) => s.id === "demand_driven")!.days;
-    render(<TrapTruckDaysChart lang="de" fixedDays={fixed} demandDays={demand} />);
+    render(
+      <TrapTruckDaysChart
+        lang="de"
+        fixedDays={fixed}
+        demandDays={demand}
+        cycleDays={simulationFixture.config_echo.frequency_days.toLocaleString("en-US")}
+      />,
+    );
     const chart = document.querySelector('[data-testid="chart-trap"]');
     expect(chart?.textContent).toContain("Modellierter 28-Tage-Zyklus [Demo-Annahme]");
     expect(chart?.textContent).toContain("Bedarfsorientiert, gleicher Tag (ohne Staffelung) [Prognose]");

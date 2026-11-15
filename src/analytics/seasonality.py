@@ -6,9 +6,9 @@ is EXTERNAL CALENDAR INPUT (src.analytics.holidays), not dataset-derived.
 School vacations are NOT modelled (dates unverified — open question in
 docs/eda_report.md); only public holidays are analysed.
 
-All outputs are descriptive: reading counts measure observations in the source
-file, whose semantics are unresolved (docs/data_profile.md §13.1) — no causal
-claim is attached to any ratio below.
+All outputs are descriptive: reading counts measure emptying events —
+semantics per contracts §1.5 (v4, representative-stated; docs/data_profile.md
+§13.1), no causal claim is attached to any ratio below.
 """
 
 from __future__ import annotations

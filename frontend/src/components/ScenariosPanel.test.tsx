@@ -164,6 +164,65 @@ describe("ScenariosPanel — results (§6 cost + service together)", () => {
     expect(details?.textContent).toContain("1 series skipped");
   });
 
+  it("renders — for null baseline median/peak trucks (backend: None iff no feasible active day)", async () => {
+    // §5.2.6 wire truth (src/api/schemas.py): median_trucks_per_active_day and
+    // peak_trucks are nullable — render an em-dash, never "NaN"/"null"/crash.
+    const nullTrucks = {
+      ...scenariosFixture,
+      observed_baseline: {
+        ...scenariosFixture.observed_baseline,
+        median_trucks_per_active_day: null,
+        peak_trucks: null,
+      },
+    };
+    stubBoth(nullTrucks, simulationFixture);
+    render(
+      <ScenariosPanel
+        lang="en"
+        config={configFixture}
+        configLoading={false}
+        datasetVersion={0}
+      />,
+    );
+    await flush();
+    await click(document.querySelector('[data-testid="scenarios-run"]'));
+    await flush();
+    await flush();
+
+    const baseline = document.querySelector('[data-testid="scenarios-baseline"]')?.textContent ?? "";
+    expect(baseline).toContain("261,500 EUR"); // card still renders
+    expect(baseline).toContain("(median)—"); // median null → em-dash
+    expect(baseline).toContain("Peak trucks—"); // peak null → em-dash
+    expect(baseline).not.toContain("NaN");
+    expect(baseline).not.toContain("null");
+  });
+
+  it("titles the fixed-frequency card with the echo's frequency_days (never hardcoded 28)", async () => {
+    // Review finding 4: the card title must track the run's config echo —
+    // a user-changed frequency slider (here 14) must show, not a stale 28.
+    const echo14 = {
+      ...scenariosFixture,
+      config_echo: { ...scenariosFixture.config_echo, frequency_days: 14 },
+    };
+    stubBoth(echo14, simulationFixture);
+    render(
+      <ScenariosPanel
+        lang="en"
+        config={configFixture}
+        configLoading={false}
+        datasetVersion={0}
+      />,
+    );
+    await flush();
+    await click(document.querySelector('[data-testid="scenarios-run"]'));
+    await flush();
+    await flush();
+
+    const fixed = document.querySelector('[data-testid="scenarios-strategy-fixed"]')?.textContent ?? "";
+    expect(fixed).toContain("Modelled 14-day cycle [demo assumption]");
+    expect(fixed).not.toContain("28-day");
+  });
+
   it("always shows the mega-day model-consequence note and data-basis labels", async () => {
     stubBoth(scenariosFixture, simulationFixture);
     render(

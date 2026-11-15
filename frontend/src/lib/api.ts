@@ -740,8 +740,9 @@ export interface ObservedBaselineBlock {
   truck_days: number;
   cost_eur_total: number;
   cost_eur_per_year_predicted: number;
-  median_trucks_per_active_day: number;
-  peak_trucks: number;
+  /** §4.8: null iff no feasible active day (render an em-dash, never coerce). */
+  median_trucks_per_active_day: number | null;
+  peak_trucks: number | null;
   /** Surfaced, never coerced (§4.8). */
   capacity_infeasible_days: number;
 }

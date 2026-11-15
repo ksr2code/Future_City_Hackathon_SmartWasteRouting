@@ -31,4 +31,15 @@ describe("i18n EN/DE key parity (file-header promise)", () => {
     expect(en).not.toContain("{n}");
     expect(de).not.toContain("{n}");
   });
+
+  it("overview.toggle.today is parameterised with the echo's frequency_days (never hardcoded 28)", () => {
+    // Review finding 4: the fixed-cycle label must follow the current
+    // frequency_days from the API config echo (M18 {days} convention).
+    const en = tf("en", "overview.toggle.today", { days: 14 });
+    const de = tf("de", "overview.toggle.today", { days: 14 });
+    expect(en).toBe("Modelled 14-day cycle [demo assumption]");
+    expect(de).toBe("Modellierter 14-Tage-Zyklus [Demo-Annahme]");
+    expect(en).not.toContain("28");
+    expect(de).not.toContain("28");
+  });
 });

@@ -216,6 +216,13 @@ describe("deferredReasonText — every backend reason phrase maps (EN/DE, fail-s
       "All configured trucks reached their shift limit",
     ],
     ["hosted_demo_stop_cap", "Demo display limit"],
+    [
+      // Verbatim live backend sentence (src/api/services.py:661): the reason is
+      // a PREFIXED sentence, not the bare token — the mapping must prefix-match
+      // or the raw string renders (§6 fail-safe would show it untranslated).
+      "hosted_demo_stop_cap: deployment setting WASTECITY_MAX_STOPS=50 handed only the first 50 of 458 policy-selected stops to the solver; the policy selection itself is unchanged and shown in `selection`",
+      "Demo display limit",
+    ],
   ];
 
   it("maps every known reason phrase to its plain sentence (EN + DE)", () => {
