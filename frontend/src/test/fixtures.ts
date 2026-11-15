@@ -8,6 +8,7 @@ import type {
   ConfigDefaults,
   DaysToFullResponse,
   DatasetSummary,
+  ForecastResponse,
   RouteResponse,
   ScenarioResponse,
   SelectionResponse,
@@ -59,6 +60,49 @@ export const containersFixture: SeriesStatus[] = [
     last_is_overfull: true,
   },
 ];
+
+/**
+ * §5.2 ForecastResponse — SYNTHETIC demo payload (no real capture of
+ * POST /api/forecasts is committed). 2 of 3 forecasts ≥ 80 % with the default
+ * policy threshold; matches selectionFixture's as_of/target dates.
+ */
+export const forecastFixture: ForecastResponse = {
+  as_of_date: "2026-10-31",
+  target_date: "2026-11-28",
+  method: "persistence",
+  forecasts: [
+    {
+      location_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      material_type: "brown",
+      as_of_date: "2026-10-31",
+      target_date: "2026-11-28",
+      predicted_fill_pct: 92,
+      predicted_state: "full",
+      method: "persistence",
+      horizon_days: 28,
+    },
+    {
+      location_id: "ffff1111-2222-3333-4444-555555555555",
+      material_type: "green",
+      as_of_date: "2026-10-31",
+      target_date: "2026-11-28",
+      predicted_fill_pct: 80,
+      predicted_state: "full",
+      method: "persistence",
+      horizon_days: 28,
+    },
+    {
+      location_id: "11111111-2222-3333-4444-555555555555",
+      material_type: "white",
+      as_of_date: "2026-10-31",
+      target_date: "2026-11-28",
+      predicted_fill_pct: 40,
+      predicted_state: "normal",
+      method: "persistence",
+      horizon_days: 28,
+    },
+  ],
+};
 
 export const selectionFixture: SelectionResponse = {
   as_of_date: "2026-10-31",

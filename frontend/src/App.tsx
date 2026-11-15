@@ -11,7 +11,7 @@ import {
 } from "./lib/api";
 import { fetchHealth, type Health } from "./lib/health";
 import { t, type Lang, type TranslationKey } from "./lib/i18n";
-import { CandidatesPanel } from "./components/CandidatesPanel";
+import { PlanningView } from "./components/PlanningView";
 import { ConfigEditor } from "./components/ConfigEditor";
 import { ContainerList } from "./components/ContainerList";
 import { ContainersIntervalPanel } from "./components/ContainersIntervalPanel";
@@ -236,10 +236,13 @@ export default function App() {
         </div>
 
         <div hidden={activeTab !== "forecast"}>
-          <ErrorBoundary label="Forecast & candidates">
-            <CandidatesPanel
+          <ErrorBoundary label="Planning">
+            <PlanningView
+              lang={lang}
               defaultAsOf={summary?.date_max ?? null}
               policyOverride={policyOverride}
+              selectThresholdPct={config?.policy?.select_threshold_pct ?? null}
+              datasetVersion={datasetVersion}
             />
           </ErrorBoundary>
         </div>
@@ -247,6 +250,7 @@ export default function App() {
         <div hidden={activeTab !== "route"}>
           <ErrorBoundary label="Route proposal">
             <RoutePanel
+              lang={lang}
               defaultAsOf={summary?.date_max ?? null}
               policyOverride={policyOverride}
               routingOverride={routingOverride}

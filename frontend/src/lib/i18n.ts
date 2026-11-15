@@ -19,7 +19,7 @@ const en = {
   "nav.overview": "Overview",
   "nav.data": "Data & upload",
   "nav.containers": "Containers",
-  "nav.forecast": "Forecast & candidates",
+  "nav.forecast": "Planning",
   "nav.route": "Route plan",
   "nav.scenarios": "Scenarios & timeline",
   "nav.config": "Configuration",
@@ -233,6 +233,101 @@ const en = {
   "containers.interval.overdueTitle":
     "The [predicted] full date lies in the past: the rate model assumes no emptying after the last record — treat this container as due for a check.",
 
+  "planning.title": "Which containers will be full soon, and when?",
+  "planning.subtitle":
+    "What this shows: per-container estimates derived from the emptying records — [predicted], not observed. Why it matters: only containers that likely need service enter the route plan. Method details and the honest evaluation are under Technical details.",
+  "planning.basis":
+    "Basis: emptying records from the dataset — fill levels between emptyings are a model assumption, not sensor data.",
+  "planning.params.asOf": "As-of date (ISO)",
+  "planning.params.horizon": "Horizon (days)",
+  "planning.params.horizonNote": "default 28 d = observed median reading gap",
+  "planning.params.method": "Method",
+  "planning.method.persistence": "Last measured level holds (persistence)",
+  "planning.method.rate": "Fill-speed trend (rate)",
+  "planning.run": "Run planning",
+  "planning.running": "Estimating fill levels and selecting candidates",
+  "planning.kpi.thresholdTitle": "predicted ≥ {threshold} % by the horizon",
+  "planning.kpi.thresholdNote": "policy threshold from the config echo [demo assumption]",
+  "planning.kpi.medianTitle": "median days to full",
+  "planning.kpi.medianNote": "{n} of {total} series have an estimate [predicted]",
+  "planning.kpi.lowerBoundTitle": "estimates are lower bounds only",
+  "planning.kpi.lowerBoundNote":
+    "these series refill from an assumed level after the last emptying — slower than predicted is possible",
+  "planning.kpi.overdueTitle": "predicted full before today",
+  "planning.kpi.overdueNote": "the model assumes no emptying after the last record",
+  "planning.table.title": "Filling next",
+  "planning.table.subtitle":
+    "Top {n} series by soonest predicted full date — [predicted] estimates, not observed behaviour.",
+  "planning.table.excluded": "{n} series without an estimate are excluded (not enough records or no numeric fill).",
+  "planning.table.empty": "No series carries a predicted full date.",
+  "planning.table.colSeries": "Series",
+  "planning.table.colLastFill": "Last fill",
+  "planning.table.colDaysToFull": "Days to full",
+  "planning.table.colPredictedDate": "Predicted full",
+  "planning.candidates.selected": "Selected",
+  "planning.candidates.selectedEmpty": "No containers selected",
+  "planning.candidates.skipped": "Skipped",
+  "planning.candidates.skippedEmpty": "Nothing skipped",
+  "planning.candidates.noSelection": "No selection yet",
+  "planning.candidates.noSelectionHint": "Pick as-of date + horizon and run to see predicted candidates.",
+  "planning.candidates.selectError": "Candidate selection failed",
+  "planning.candidates.insight":
+    "{selected} of {total} containers are expected to need emptying by {date} — {skipped} can wait",
+  "planning.candidates.panelTitle": "Candidate stops for the route plan",
+  "planning.candidates.panelSubtitle":
+    "Predicted fill per container and the policy decision with its reason. Predicted fill is a model output [predicted]. Selected vs skipped per policy §3 with reasons.",
+  "planning.candidates.batch":
+    "Batch {asOf} → target {target} · selected {selected} · skipped {skipped}",
+  "planning.candidates.policyEcho":
+    "Effective policy (echo): threshold {threshold} % · buffer {buffer} % · overfull always selected: {overfull} — all [demo assumption]",
+  "planning.candidates.colPredictedFill": "Predicted fill",
+  "planning.candidates.colState": "State",
+  "planning.candidates.colReason": "Reason",
+  "planning.candidates.colDetail": "Detail",
+  "planning.tech.persistence":
+    "Last measured level holds (persistence): the predicted fill stays at the last measured level until the horizon — simple and transparent.",
+  "planning.tech.rate":
+    "Fill-speed trend (rate): the predicted fill grows by the series' median fill speed between emptyings.",
+  "planning.tech.evaluation":
+    "Evaluation on the real dataset: persistence beats rate — test MAE 22.8 vs 25.8 percentage points [evaluation on real data].",
+  "planning.tech.autoNote":
+    "The estimates above were fetched automatically with the dataset's last record date, a 28-day horizon and the persistence method.",
+
+  "routing.title": "One collection day, optimised",
+  "routing.subtitle":
+    "What this shows: the visiting order per truck for the selected day, the load progression along the way, and the feasibility checks behind it. Why it matters: drivers get a feasible, explainable tour. Computed over synthetic demo geography — coordinates, depot, disposal, fleet and travel matrix are [demo assumption]; distances are straight-line derived, not road distance (§4.2/§5.3).",
+  "routing.run": "Compute route proposal",
+  "routing.running": "Forecasting, selecting and solving",
+  "routing.runningHint": "solver time limit bounded",
+  "routing.empty": "No route computed yet",
+  "routing.emptyHint": "Run with an as-of date to get a labelled demo route proposal.",
+  "routing.error": "Route computation failed",
+  "routing.dayContext": "Day: as-of {asOf} → forecast target {target} · demo fleet and geography [demo assumption]",
+  "routing.link.withPeak":
+    "The day-by-day plan lives in Scenarios — our day-spreading schedule visits every container across the year (peak {n} truck(s) per day, [predicted] simulation). This demo optimises the visiting order for the trucks you configure.",
+  "routing.link.withoutPeak":
+    "The day-by-day plan lives in Scenarios — our day-spreading schedule visits every container across the year. This demo optimises the visiting order for the trucks you configure.",
+  "routing.insight":
+    "{routes} route(s) serve {served} of {total} selected stops on this day — {deferred} deferred to a later day",
+  "routing.degraded":
+    "Solver returned {status} — deferred stops are listed below, never hidden (contract §4.4).",
+  "routing.deferred.title": "Deferred to a later day ({n})",
+  "routing.deferred.explanation":
+    "Not visited on this configured day — the fleet or shift limit ran out first (reasons per row). The Scenarios day-spreading plan schedules every container across days, so a deferral here is not a lost stop.",
+  "routing.deferred.none": "All selected stops are served on this day.",
+  "routing.reason.noInsertion":
+    "No truck had free capacity or shift time left for this stop on the configured day.",
+  "routing.reason.shift":
+    "One visit plus the drive there and back does not fit into a truck's daily shift — the stop cannot be served on any single day with the configured shift.",
+  "routing.reason.volume":
+    "The container's expected collection volume exceeds the largest truck compartment for its material — no configured truck can take it in one visit.",
+  "routing.reason.weight":
+    "The container's expected collection weight exceeds the largest truck weight capacity — no configured truck can take it in one visit.",
+  "routing.reason.fleetExhausted":
+    "All configured trucks reached their shift limit with stops still waiting in the visiting order.",
+  "routing.reason.hostedCap":
+    "Demo display limit: only the first stops of the selection are routed on the hosted demo — the rest are deferred.",
+
   "overview.compare.serviceAnchor":
     "{pct} of emptying records full-or-overfull — observed service anchor, shown beside every cost (§6)",
   "overview.compare.serviceAnchorUnavailable":
@@ -355,7 +450,7 @@ const de: Record<TranslationKey, string> = {
   "nav.overview": "Übersicht",
   "nav.data": "Daten & Upload",
   "nav.containers": "Behälter",
-  "nav.forecast": "Prognose & Kandidaten",
+  "nav.forecast": "Planung",
   "nav.route": "Routenplan",
   "nav.scenarios": "Szenarien & Zeitverlauf",
   "nav.config": "Konfiguration",
@@ -568,6 +663,101 @@ const de: Record<TranslationKey, string> = {
   "containers.interval.overdue": "überfällig",
   "containers.interval.overdueTitle":
     "Das [prognostizierte] Voll-Datum liegt in der Vergangenheit: das Ratenmodell nimmt keine Leerung nach dem letzten Datensatz an — diesen Behälter zeitnah prüfen.",
+
+  "planning.title": "Welche Behälter sind bald voll, und wann?",
+  "planning.subtitle":
+    "Was diese Ansicht zeigt: Behälter-Schätzungen, abgeleitet aus den Leerungsdaten — [Prognose], nicht beobachtet. Warum das zählt: nur Behälter, die wahrscheinlich einen Service brauchen, kommen in den Routenplan. Methoden-Erklärung und die ehrliche Bewertung stehen unter Technische Details.",
+  "planning.basis":
+    "Grundlage: Leerungsdaten aus dem Datensatz — Füllstände zwischen Leerungen sind eine Modellannahme, keine Sensordaten.",
+  "planning.params.asOf": "Stichtag (ISO)",
+  "planning.params.horizon": "Horizont (Tage)",
+  "planning.params.horizonNote": "Standard 28 T = beobachtete mittlere Abstand zwischen Lesungen",
+  "planning.params.method": "Methode",
+  "planning.method.persistence": "Zuletzt gemessener Stand hält (Persistence)",
+  "planning.method.rate": "Füllgeschwindigkeits-Trend (Rate)",
+  "planning.run": "Planung starten",
+  "planning.running": "Füllstände werden geschätzt, Kandidaten werden ausgewählt",
+  "planning.kpi.thresholdTitle": "prognostiziert ≥ {threshold} % bis zum Horizont",
+  "planning.kpi.thresholdNote": "Schwellenwert aus der Richtlinien-Rückmeldung [Demo-Annahme]",
+  "planning.kpi.medianTitle": "Median Tage bis voll",
+  "planning.kpi.medianNote": "{n} von {total} Serien haben eine Schätzung [Prognose]",
+  "planning.kpi.lowerBoundTitle": "Schätzungen sind nur Untergrenzen",
+  "planning.kpi.lowerBoundNote":
+    "diese Serien füllen sich nach der letzten Leerung ab einem angenommenen Stand — langsamer als prognostiziert ist möglich",
+  "planning.kpi.overdueTitle": "prognostiziert voll vor heute",
+  "planning.kpi.overdueNote": "das Modell nimmt keine Leerung nach dem letzten Datensatz an",
+  "planning.table.title": "Als nächstes voll",
+  "planning.table.subtitle":
+    "Top {n} Serien nach frühestem prognostiziertem Voll-Datum — [Prognose]-Schätzungen, kein beobachtetes Verhalten.",
+  "planning.table.excluded": "{n} Serien ohne Schätzung sind ausgeschlossen (zu wenige Datensätze oder kein numerischer Füllstand).",
+  "planning.table.empty": "Keine Serie hat ein prognostiziertes Voll-Datum.",
+  "planning.table.colSeries": "Serie",
+  "planning.table.colLastFill": "Letzter Füllstand",
+  "planning.table.colDaysToFull": "Tage bis voll",
+  "planning.table.colPredictedDate": "Prognose voll",
+  "planning.candidates.selected": "Ausgewählt",
+  "planning.candidates.selectedEmpty": "Keine Behälter ausgewählt",
+  "planning.candidates.skipped": "Übersprungen",
+  "planning.candidates.skippedEmpty": "Nichts übersprungen",
+  "planning.candidates.noSelection": "Noch keine Auswahl",
+  "planning.candidates.noSelectionHint": "Stichtag + Horizont wählen und starten, um prognostizierte Kandidaten zu sehen.",
+  "planning.candidates.selectError": "Kandidatenauswahl fehlgeschlagen",
+  "planning.candidates.insight":
+    "{selected} von {total} Behältern brauchen bis {date} voraussichtlich eine Leerung — {skipped} können warten",
+  "planning.candidates.panelTitle": "Kandidaten-Stopps für den Routenplan",
+  "planning.candidates.panelSubtitle":
+    "Prognostizierter Füllstand pro Behälter und die Richtlinien-Entscheidung mit Begründung. Der prognostizierte Füllstand ist eine Modellausgabe [Prognose]. Ausgewählt vs. übersprungen gemäß Richtlinie §3 mit Gründen.",
+  "planning.candidates.batch":
+    "Batch {asOf} → Ziel {target} · ausgewählt {selected} · übersprungen {skipped}",
+  "planning.candidates.policyEcho":
+    "Effektive Richtlinie (Echo): Schwellenwert {threshold} % · Puffer {buffer} % · Überlauf immer ausgewählt: {overfull} — alle [Demo-Annahme]",
+  "planning.candidates.colPredictedFill": "Prognose Füllstand",
+  "planning.candidates.colState": "Zustand",
+  "planning.candidates.colReason": "Grund",
+  "planning.candidates.colDetail": "Detail",
+  "planning.tech.persistence":
+    "Zuletzt gemessener Stand hält (Persistence): der prognostizierte Füllstand bleibt bis zum Horizont auf dem letzten gemessenen Stand — einfach und nachvollziehbar.",
+  "planning.tech.rate":
+    "Füllgeschwindigkeit (Rate): der prognostizierte Füllstand wächst um die mittlere Füllgeschwindigkeit der Serie zwischen Leerungen.",
+  "planning.tech.evaluation":
+    "Bewertung am echten Datensatz: Persistence schlägt Rate — Test-MAE 22,8 vs. 25,8 Prozentpunkte [Bewertung an echten Daten].",
+  "planning.tech.autoNote":
+    "Die Schätzungen oben wurden automatisch mit dem letzten Daten-Zeitpunkt des Datensatzes, einem 28-Tage-Horizont und der Persistence-Methode abgerufen.",
+
+  "routing.title": "Ein Sammeltag, optimiert",
+  "routing.subtitle":
+    "Was diese Ansicht zeigt: die Fahrreihenfolge pro Lkw für den gewählten Tag, die Beladung entlang der Tour und die Machbarkeitsprüfungen dahinter. Warum das zählt: Fahrerinnen und Fahrer bekommen eine machbare, erklärbare Tour. Berechnet über synthetische Demo-Geografie — Koordinaten, Depot, Entsorgung, Fuhrpark und Entfernungsmatrix sind [Demo-Annahme]; Entfernungen sind Luftlinien-Schätzungen, keine Straßen-Kilometer (§4.2/§5.3).",
+  "routing.run": "Routenvorschlag berechnen",
+  "routing.running": "Prognose, Auswahl und Lösung werden berechnet",
+  "routing.runningHint": "Lösungszeitlimit ist begrenzt",
+  "routing.empty": "Noch keine Route berechnet",
+  "routing.emptyHint": "Mit einem Stichtag starten, um einen beschrifteten Demo-Routenvorschlag zu erhalten.",
+  "routing.error": "Routenberechnung fehlgeschlagen",
+  "routing.dayContext": "Tag: Stichtag {asOf} → Prognose-Ziel {target} · Demo-Fuhrpark und -Geografie [Demo-Annahme]",
+  "routing.link.withPeak":
+    "Der Tagesplan liegt unter Szenarien — unser Staffelungsplan besucht jeden Behälter über das Jahr verteilt (Spitze {n} Lkw pro Tag, [Prognose]-Simulation). Dieses Demo optimiert die Fahrreihenfolge für die konfigurierten Lkw.",
+  "routing.link.withoutPeak":
+    "Der Tagesplan liegt unter Szenarien — unser Staffelungsplan besucht jeden Behälter über das Jahr verteilt. Dieses Demo optimiert die Fahrreihenfolge für die konfigurierten Lkw.",
+  "routing.insight":
+    "{routes} Tour(en) bedienen {served} von {total} ausgewählten Stopps an diesem Tag — {deferred} auf einen späteren Tag verschoben",
+  "routing.degraded":
+    "Solver lieferte {status} — verschobene Stopps sind unten aufgeführt, niemals versteckt (Kontrakt §4.4).",
+  "routing.deferred.title": "Auf einen späteren Tag verschoben ({n})",
+  "routing.deferred.explanation":
+    "An diesem konfigurierten Tag nicht gefahren — Fuhrpark oder Schichtlimit war zuerst erschöpft (Begründung pro Zeile). Der Szenarien-Staffelungsplan verteilt jeden Behälter auf Tage, eine Verschiebung hier ist kein verlorener Stopp.",
+  "routing.deferred.none": "Alle ausgewählten Stopps werden an diesem Tag bedient.",
+  "routing.reason.noInsertion":
+    "Kein Lkw hatte an dem konfigurierten Tag freie Kapazität oder Schichtzeit für diesen Stopp übrig.",
+  "routing.reason.shift":
+    "Eine Leerung plus Hin- und Rückfahrt passt nicht in die tägliche Schicht eines Lkw — der Stopp ist an keinem einzelnen Tag mit der konfigurierten Schicht bedienbar.",
+  "routing.reason.volume":
+    "Das erwartete Sammelvolumen des Behälters übersteigt das größte Lkw-Fach für sein Material — kein konfigurierter Lkw kann ihn in einer Fahrt mitnehmen.",
+  "routing.reason.weight":
+    "Das erwartete Sammelgewicht des Behälters übersteigt die größte Lkw-Zuladung — kein konfigurierter Lkw kann ihn in einer Fahrt mitnehmen.",
+  "routing.reason.fleetExhausted":
+    "Alle konfigurierten Lkw haben ihr Schichtlimit erreicht, während in der Reihenfolge noch Stopps warteten.",
+  "routing.reason.hostedCap":
+    "Demo-Anzeigegrenze: nur die ersten Stopps der Auswahl werden im gehosteten Demo geroutet — der Rest ist verschoben.",
 
   "overview.compare.serviceAnchor":
     "{pct} der Leerungsdaten voll oder übervoll — beobachteter Serviceniveau-Anker, neben jeder Kostenangabe gezeigt (§6)",

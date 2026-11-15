@@ -1,4 +1,5 @@
 import type { ForecastMethod } from "../lib/api";
+import { t, type Lang, type TranslationKey } from "../lib/i18n";
 
 /**
  * Shared forecast parameters (§5.2 ForecastRequest): as_of_date (ISO, from the
@@ -14,14 +15,23 @@ export interface ForecastParams {
 
 export const DEFAULT_HORIZON_DAYS = 28; // [observed] median gap 28 d (§2.1) — demo default
 
+/** Plain-language option labels (EN/DE) — full explanations in TechDetails. */
+const METHOD_LABELS: Record<ForecastMethod, TranslationKey> = {
+  persistence: "planning.method.persistence",
+  rate: "planning.method.rate",
+};
+
 export function ForecastParamsForm({
   value,
   onChange,
   disabled,
+  lang = "en",
 }: {
   value: ForecastParams;
   onChange: (next: ForecastParams) => void;
   disabled?: boolean;
+  /** Optional: EN by default (RoutePanel stays EN — M18); Planning passes the app language. */
+  lang?: Lang;
 }) {
   const inputClass =
     "rounded border border-slate-300 bg-white px-2 py-1 text-sm disabled:opacity-50";
@@ -29,7 +39,7 @@ export function ForecastParamsForm({
   return (
     <div className="flex flex-wrap items-end gap-3" data-testid="forecast-params">
       <label className="flex flex-col text-xs font-medium text-slate-600">
-        As-of date (ISO)
+        {t(lang, "planning.params.asOf")}
         <input
           type="date"
           value={value.as_of_date}
@@ -40,7 +50,7 @@ export function ForecastParamsForm({
         />
       </label>
       <label className="flex flex-col text-xs font-medium text-slate-600">
-        Horizon (days)
+        {t(lang, "planning.params.horizon")}
         <input
           type="number"
           min={1}
@@ -55,11 +65,11 @@ export function ForecastParamsForm({
           data-testid="horizon-input"
         />
         <span className="mt-0.5 text-[10px] font-normal text-slate-400">
-          default 28 d = observed median reading gap
+          {t(lang, "planning.params.horizonNote")}
         </span>
       </label>
       <label className="flex flex-col text-xs font-medium text-slate-600">
-        Method
+        {t(lang, "planning.params.method")}
         <select
           value={value.method}
           disabled={disabled}
@@ -67,8 +77,8 @@ export function ForecastParamsForm({
           className={`mt-1 ${inputClass}`}
           data-testid="method-select"
         >
-          <option value="persistence">persistence</option>
-          <option value="rate">rate</option>
+          <option value="persistence">{t(lang, METHOD_LABELS.persistence)}</option>
+          <option value="rate">{t(lang, METHOD_LABELS.rate)}</option>
         </select>
       </label>
     </div>
