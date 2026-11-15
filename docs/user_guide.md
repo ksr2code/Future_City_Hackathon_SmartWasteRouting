@@ -1,4 +1,4 @@
-# SmartWasteRouting — user guide (M13, refreshed for v4 semantics + scenario engine, M16; M17 v5: observed baseline + money story + offline presentation)
+# SmartWasteRouting — user guide (M13, refreshed for v4 semantics + scenario engine, M16; M17 v5: observed baseline + money story; M19: Overview page is the pitch)
 
 Explainable glass-waste collection forecasting and route-optimisation
 prototype for the PreZero / City of Heilbronn challenge. This guide covers
@@ -270,20 +270,24 @@ latest record ≤ `start_date`; leakage-safe), not observed behaviour.
 TechDetails show the calibration echo: simulated fill-at-emptying median
 42.5 % vs observed 60.0 %.
 
-### Presentation mode
-A 6-slide, big-type walkthrough (←/→ navigation, Esc closes, guarded
-fullscreen) that runs **entirely offline from bundled captures** (§6 v5,
-M17): the slides read committed verbatim API captures
-(`frontend/src/test/fixtures/real-capture/presentation/`, captured
-2026-11-15) — **zero live network calls while presenting**, no backend
-needed. Every slide says its basis: "precalculated from real data (captured
-2026-11-15)" — never "live" — and keeps the honesty labels ([observed] /
-[predicted] / simulation basis, straight-line distance, [representative] /
-[demo assumption] tags). Slide 5 is the **money story centrepiece**:
-523 → 342 truck-days, 261,500 → 171,000 EUR, ≈ 90,500 EUR lower (−34.6 %,
-derived) with better service. Loading is bounded: a missing/invalid capture
-renders a visible error — never an endless spinner, never a fabricated
-number. The walkthrough script is `docs/demo_script.md`.
+### Overview story sections (the pitch, live)
+The Overview page itself is the pitch (user decision 2026-11-15 — the
+separate fullscreen presentation mode was removed; contracts §6 v5 bullet
+superseded). Down the page: key numbers [observed] → filling tanks +
+today's recommendation → **observed-visits timeline** (229 active-day bars
+over the 349-day window, median line [observed, `/api/simulation`
+`observed_days`]) → **fill-curve illustration + days-to-full histogram**
+[predicted] → **the trap** (demand-driven same-day clustering: 1,040
+truck-days / 520,000 EUR vs fixed-cycle 852 / 426,000 EUR [live
+`POST /api/scenarios`]) → **money story** (523 truck-days / 261,500 EUR
+[observed × representative time model] → 342 / 171,000 EUR [predicted —
+simulation on observed rates]; ≈ 90,500 EUR lower, −34.6 % derived, plan
+overflow 0.0 % vs the 26.9 % anchor [observed]) → **outcomes strip** (cost
+and service badges together, §6) → **four-step comparison card** (§3.1).
+Every chart keeps its [observed] / [predicted] / [demo assumption] labels;
+sections read the **live API** under normal loading/empty/error conventions
+— a failed call shows its error state, never a fabricated number. The
+3-minute walkthrough script is `docs/demo_script.md`.
 
 ### Config editor
 Edits 3 policy fields and the routing config (container volume, densities,

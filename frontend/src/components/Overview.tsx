@@ -6,6 +6,7 @@ import {
   MATERIAL_TYPES,
   runCandidates,
   runScenarios,
+  runSimulation,
   type ComparisonMethod,
   type ComparisonResponse,
   type ComparisonScenario,
@@ -15,12 +16,16 @@ import {
   type FleetBudget,
   type ScenarioResponse,
   type SelectionResponse,
+  type SimulationResponse,
 } from "../lib/api";
 import { formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "../lib/format";
 import { t, tf, type Lang, type TranslationKey } from "../lib/i18n";
+import { DaysToFullHistogram } from "./charts/DaysToFullHistogram";
+import { FillCurveIllustration } from "./charts/FillCurveIllustration";
+import { ObservedVisitsTimeline } from "./charts/ObservedVisitsTimeline";
+import { TrapTruckDaysChart } from "./charts/TrapTruckDaysChart";
 import { DemoLoadButton } from "./DemoLoadButton";
 import { GlassLegend } from "./GlassLegend";
-import { PresentationMode } from "./PresentationMode";
 import { TechDetails } from "./TechDetails";
 import { TodayPlanToggle } from "./TodayPlanToggle";
 import { EmptyState, ErrorState, LoadingState } from "./states";
@@ -36,8 +41,7 @@ import { EmptyState, ErrorState, LoadingState } from "./states";
  * the TechDetails collapsible.
  */
 
-/** Recommendation horizon for the overview (task-fixed 7 days) [demo assumption].
- *  Exported so the presentation mode reuses the same labelled constant. */
+/** Recommendation horizon for the overview (task-fixed 7 days) [demo assumption]. */
 export const RECOMMENDATION_HORIZON_DAYS = 7;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TOP_EXAMPLES = 5;
@@ -228,6 +232,20 @@ function formatCostRow(scenario: ComparisonScenario): string {
   return `${formatEur(scenario.cost_eur_per_day)}/day · ${formatEur(scenario.cost_eur_per_year)}/year`;
 }
 
+/**
+ * Defensive §5.2.5 simulation guard: observed_days array + both strategies'
+ * day arrays present; malformed responses degrade, never crash.
+ */
+function validSimulation(payload: SimulationResponse | null): SimulationResponse | null {
+  if (payload === null) return null;
+  if (!Array.isArray(payload.observed_days) || !Array.isArray(payload.strategies)) return null;
+  const fixed = payload.strategies.find((s) => s.id === "fixed_frequency");
+  const demand = payload.strategies.find((s) => s.id === "demand_driven");
+  if (fixed === undefined || demand === undefined) return null;
+  if (!Array.isArray(fixed.days) || !Array.isArray(demand.days)) return null;
+  return payload;
+}
+
 export function Overview({
   lang,
   summary,
@@ -259,8 +277,13 @@ export function Overview({
   const [moneyError, setMoneyError] = useState<string | null>(null);
   const [moneyNotFound, setMoneyNotFound] = useState(false);
 
-  // W5: presentation mode overlay (opened from the hero button).
-  const [presentationOpen, setPresentationOpen] = useState(false);
+  // §5.2.5 simulation replay (POST /api/simulation) — observed daily rhythm
+  // (v5 observed_days) + the truck-days "trap" series. 404 before a dataset
+  // is a state fact (empty note), never an error.
+  const [simulation, setSimulation] = useState<SimulationResponse | null>(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const [simError, setSimError] = useState<string | null>(null);
+  const [simNotFound, setSimNotFound] = useState(false);
 
   const asOf =
     typeof summary?.date_max === "string" && ISO_DATE.test(summary.date_max)
@@ -424,6 +447,46 @@ export function Overview({
     };
   }, [hasDataset, datasetVersion, recalculateKey]);
 
+  // §5.2.5 simulation replay for the story charts — one POST with server
+  // defaults; 404 (no dataset) → empty note, never an error.
+  useEffect(() => {
+    if (!hasDataset) {
+      setSimulation(null);
+      setSimNotFound(false);
+      setSimError(null);
+      return;
+    }
+    let cancelled = false;
+    setSimLoading(true);
+    setSimNotFound(false);
+    setSimError(null);
+    runSimulation({})
+      .then((payload) => {
+        if (cancelled) return;
+        if (validSimulation(payload) === null) {
+          setSimulation(null);
+          setSimError("Unexpected /api/simulation response shape (missing observed_days/strategies)");
+          return;
+        }
+        setSimulation(payload);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setSimulation(null);
+        if (err instanceof ApiError && err.status === 404) {
+          setSimNotFound(true);
+        } else {
+          setSimError(err instanceof ApiError ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSimLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDataset, datasetVersion, recalculateKey]);
+
   const fillStats = validFillStats(summary);
   const selected = selection?.selected ?? [];
   const skipped = selection?.skipped ?? [];
@@ -477,8 +540,13 @@ export function Overview({
     moneySavedEur !== null && moneyBaseline !== null && moneyBaseline.cost_eur_total > 0
       ? (moneySavedEur / moneyBaseline.cost_eur_total) * 100
       : null;
-  // §6: service anchor rendered beside every cost row in the comparison card.
+  // §6 §6: service anchor rendered beside every cost row in the comparison card.
   const serviceAnchor = validServiceAnchor(comparisonValid?.observed_service_anchor);
+  // §6 v5 story charts — validated simulation payload + the two replay series
+  // for the trap chart (both from the same POST /api/simulation response).
+  const simValid = validSimulation(simulation);
+  const simTrapFixed = simValid?.strategies.find((s) => s.id === "fixed_frequency")?.days ?? [];
+  const simTrapDemand = simValid?.strategies.find((s) => s.id === "demand_driven")?.days ?? [];
   // W3 tanks: per-material filling times from the §5.2.3 v2 payload.
   const statsByMaterial = validStatsByMaterial(daysToFull);
   const maxMedianDays =
@@ -501,14 +569,6 @@ export function Overview({
           </h2>
           <div className="flex items-center gap-3">
             <GlassLegend lang={lang} />
-            <button
-              type="button"
-              onClick={() => setPresentationOpen(true)}
-              data-testid="presentation-open"
-              className="rounded bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-700"
-            >
-              {t(lang, "overview.presentation.open")}
-            </button>
           </div>
         </div>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-600">
@@ -735,6 +795,69 @@ export function Overview({
         </section>
       ) : null}
 
+      {/* §6 v5 story — the observed rhythm (§5.2.5 v5 observed_days), fed by
+          the live POST /api/simulation. 404 before a dataset → empty note. */}
+      {!summaryLoading && summaryError === null && hasDataset ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="story-observed">
+          <h3 className="text-base font-semibold text-slate-900">{t(lang, "charts.observed.title")}</h3>
+          {simLoading ? (
+            <div className="mt-3"><LoadingState label={t(lang, "overview.state.simulationLoading")} /></div>
+          ) : null}
+          {simError !== null && !simLoading ? (
+            <div className="mt-3"><ErrorState label={t(lang, "overview.state.simulationError")} hint={simError} /></div>
+          ) : null}
+          {simNotFound && !simLoading && simError === null ? (
+            <div className="mt-3"><EmptyState label={t(lang, "overview.state.scenariosNoDataset")} /></div>
+          ) : null}
+          {simValid !== null && !simLoading && simError === null && !simNotFound ? (
+            <div className="mt-3">
+              <ObservedVisitsTimeline lang={lang} days={simValid.observed_days} />
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+
+      {/* How it works — static, shown even before data is loaded */}
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="how-strip">
+        <h3 className="text-base font-semibold text-slate-900">{t(lang, "overview.how.title")}</h3>
+        <ol className="mt-3 grid gap-2 text-sm text-slate-700 md:grid-cols-4">
+          {(["step1", "step2", "step3", "step4"] as const).map((step, i) => (
+            <li key={step} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+              <span className="mr-1 font-bold text-sky-700">{i + 1}.</span>
+              {t(lang, `overview.how.${step}` as TranslationKey)}
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* §6 v5 story — how fast containers fill: schematic curve (explicitly
+          an illustration) + days-to-full histogram from the §5.2.3 v2 payload
+          Overview already fetches. */}
+      {!summaryLoading && summaryError === null && hasDataset && daysToFull !== null ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="story-fill">
+          <h3 className="text-base font-semibold text-slate-900">{t(lang, "charts.fill.title")}</h3>
+          <div className="mt-3 flex flex-wrap items-start gap-4">
+            <FillCurveIllustration lang={lang} />
+            <DaysToFullHistogram lang={lang} series={daysToFull.series} />
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-amber-700">{t(lang, "charts.fill.basis")}</p>
+        </section>
+      ) : null}
+
+
+      {/* §6 v5 story — the trap: same-day demand-driven clustering vs the
+          fixed cycle's mega-days (§5.2.5 replay, live API). */}
+      {!summaryLoading && summaryError === null && hasDataset && simValid !== null && !simLoading && simError === null && !simNotFound ? (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="story-trap">
+          <h3 className="text-base font-semibold text-slate-900">{t(lang, "charts.trap.title")}</h3>
+          <div className="mt-3">
+            <TrapTruckDaysChart lang={lang} fixedDays={simTrapFixed} demandDays={simTrapDemand} />
+          </div>
+        </section>
+      ) : null}
+
+
       {/* §5.2.6 money story: observed operation vs spread plan — cost always
           with service (§6); savings derived from the response, never hardcoded. */}
       {!summaryLoading && summaryError === null && hasDataset ? (
@@ -907,18 +1030,37 @@ export function Overview({
         />
       ) : null}
 
-      {/* How it works — static, shown even before data is loaded */}
-      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="how-strip">
-        <h3 className="text-base font-semibold text-slate-900">{t(lang, "overview.how.title")}</h3>
-        <ol className="mt-3 grid gap-2 text-sm text-slate-700 md:grid-cols-4">
-          {(["step1", "step2", "step3", "step4"] as const).map((step, i) => (
-            <li key={step} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
-              <span className="mr-1 font-bold text-sky-700">{i + 1}.</span>
-              {t(lang, `overview.how.${step}` as TranslationKey)}
-            </li>
-          ))}
-        </ol>
-      </section>
+      {/* §6 v5 story — outcomes strip, derived from the money responses
+          (never a measured saving; rendered only when the plan saves). */}
+      {moneySavedEur !== null && moneySavedPct !== null && moneySpread !== null && moneyAnchorPct !== null ? (
+        <section className="rounded-lg border border-emerald-200 bg-white p-4 shadow-sm" data-testid="story-outcomes">
+          <h3 className="text-base font-semibold text-slate-900">{t(lang, "charts.outcomes.title")}</h3>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div data-testid="outcomes-cost">
+              <p className="text-3xl font-bold text-emerald-800">
+                {tf(lang, "charts.outcomes.cost", { pct: moneySavedPct.toFixed(1) })}
+              </p>
+            </div>
+            <div data-testid="outcomes-eur">
+              <p className="text-3xl font-bold text-emerald-800">
+                {tf(lang, "charts.outcomes.eur", { eur: moneySavedEur.toLocaleString("en-US") })}
+              </p>
+            </div>
+            <div data-testid="outcomes-service">
+              <p className="text-3xl font-bold text-sky-800">
+                {tf(lang, "charts.outcomes.service", {
+                  overflow: isFiniteNumber(moneySpread.service.overflow_share_pct)
+                    ? `${moneySpread.service.overflow_share_pct.toFixed(1)} %`
+                    : "— %",
+                  pct: moneyAnchorPct,
+                })}
+              </p>
+            </div>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">{t(lang, "charts.outcomes.basis")}</p>
+        </section>
+      ) : null}
+
 
       {/* Before/after: fixed schedule vs optimised */}
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" data-testid="comparison-card">
@@ -1192,15 +1334,6 @@ export function Overview({
       <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800" data-testid="overview-calmnote">
         {t(lang, "overview.calmnote")}
       </p>
-
-      {/* W5 presentation overlay (6 slides, ←/→, Esc; §6 labels stay visible) */}
-      {presentationOpen ? (
-        <PresentationMode
-          lang={lang}
-          summary={summary}
-          onClose={() => setPresentationOpen(false)}
-        />
-      ) : null}
     </div>
   );
 }

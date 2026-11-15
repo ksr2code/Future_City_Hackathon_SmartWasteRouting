@@ -112,13 +112,12 @@ cd frontend && npm test        # Vitest suite
 
 ## Demo
 
-For the 3-minute pitch no backend is needed: presentation mode runs offline
-from bundled verbatim API captures (captured 2026-11-15, §6 v5) — start the
-frontend, open http://localhost:5173 (the Vite dev server answers on
-`localhost`, not `127.0.0.1`), and press **Presentation mode**; the script
-is `docs/demo_script.md`. For the live demo, also start the backend, press
-**Load demo data** on the Overview page — or upload
-`data/raw/glass_fill_levels_anonymized_f.csv`; the full guide (screens incl.
+The 3-minute pitch is a walkthrough of the **live Overview page** (no
+separate presentation mode — the page's story sections read the live API):
+start the backend and frontend as below, open http://localhost:5173 (the
+Vite dev server answers on `localhost`, not `127.0.0.1`), press **Load demo
+data** — or upload `data/raw/glass_fill_levels_anonymized_f.csv` — and
+follow `docs/demo_script.md` down the page. The full guide (screens incl.
 the Scenarios tab with planning-lever sliders, architecture, limitations):
 `docs/user_guide.md`. No API keys are required.
 

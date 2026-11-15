@@ -243,59 +243,36 @@ const en = {
   "overview.calmnote":
     "Please note: locations, vehicles and densities in this prototype are demo assumptions. Distances are straight-line estimates — not real road distances.",
 
-  "overview.presentation.open": "Presentation",
-  "presentation.stepOf": "Step {i} of {n}",
-  "presentation.hint": "← → to navigate · Esc closes",
-  "presentation.close": "Close",
-  "presentation.unavailable": "Data not available for this step.",
-  "presentation.bundle.error":
-    "Bundled presentation data is missing or invalid — the presentation cannot start.",
-  "presentation.bundle.hint":
-    "Problem with the capture bundle: {detail}. Restore frontend/src/test/fixtures/real-capture/presentation/ and rebuild the app.",
-  "presentation.s1.title": "Why we are here",
-  "presentation.s1.basis":
-    "All figures in this presentation are precalculated from real data (captured {date}) — observed data, predictions and demo assumptions stay labelled on every slide.",
-  "presentation.s2.title": "Observed today",
-  "presentation.s2.note":
-    "of emptying records with fill at or above {thr} % (threshold: demo assumption)",
-  "presentation.s2.basis": "Basis: observed emptying records [observed].",
-  "presentation.s2.chartCaption": "Emptying visits per day [observed]",
-  "presentation.s2.median": "median {n} per active day",
-  "presentation.s3.title": "How it works",
-  "presentation.s3.illustration": "Illustration — not data",
-  "presentation.s3.fillTrigger": "fill rises → 80 % trigger → emptied (reset)",
-  "presentation.s3.histogramTitle": "Predicted days to full",
-  "presentation.s3.histogramCount": "{n} series [predicted]",
-  "presentation.s3.bin30": "≤30",
-  "presentation.s3.bin60": "31–60",
-  "presentation.s3.bin90": "61–90",
-  "presentation.s3.bin120": "91–120",
-  "presentation.s3.bin180": "121–180",
-  "presentation.s3.bin365": "181–365",
-  "presentation.s3.binMore": ">365",
-  "presentation.s3.basis": "Basis: predicted from emptying records — not measurements.",
-  "presentation.s4.title": "The trap: same-day service clusters the trucks",
-  "presentation.s4.legendFixed": "Fixed cycle (status quo) [predicted]",
-  "presentation.s4.legendDemand": "Demand-driven, same-day (no spacing) [predicted]",
-  "presentation.s4.caption":
-    "Same-day service clusters visits onto a few days — truck-days pile up in spikes even though fewer collections happen. Without day spreading, demand-driven costs more, not less.",
-  "presentation.s4.basis": "Basis: simulation on observed rates — not a prediction of reality.",
-  "presentation.s5.title": "Our plan — the money story",
-  "presentation.s5.saved":
-    "≈ {eur} EUR lower (−{pct} cost, derived) — with better service.",
-  "presentation.s5.truckDays": "Truck-days: {from} → {to}",
-  "presentation.s5.trucksPerDay": "Trucks per day: typical {typical} · peak {peak}",
-  "presentation.s5.basis":
-    "Basis: observed emptying records × representative time model · plan = simulation on observed rates, not a prediction.",
-  "presentation.s6.title": "What this means",
-  "presentation.s6.outcomeCost": "lower window cost (derived: baseline − plan ÷ baseline)",
-  "presentation.s6.outcomeEur": "saved over the window (derived)",
-  "presentation.s6.outcomeService":
-    "simulated overflow — vs {anchor} observed emptying events full-or-overfull [observed]",
-  "presentation.s6.basis":
-    "Precalculated from real data (captured {date}). Labels: [observed] × representative time model · [predicted] simulation — never a measurement.",
-  "presentation.calmbasis":
-    "All values labelled: observed · predicted · [demo assumption]. Precalculated from real data (captured {date}); full details in the dashboard views.",
+  // §6 v5 (superseded-presentation decision): the story charts live on the
+  // Overview page, fed by the live API — labels carry over unchanged.
+  "charts.observed.title": "The observed rhythm of emptying records",
+  "charts.observed.caption":
+    "What this shows: emptying records per day across the observed window. Why it matters: the workload is naturally spiky — a plan must absorb the spikes, not mirror them.",
+  "charts.observed.median": "Median per active day: {n}",
+  "charts.observed.basis": "Basis: observed emptying records [observed] — active days only.",
+  "charts.fill.title": "How fast containers fill",
+  "charts.fill.illustration": "Illustration — not data",
+  "charts.fill.trigger": "emptying trigger {pct} % [demo assumption]",
+  "charts.fill.curveCaption":
+    "What this shows: the modelled fill between two emptyings. Why it matters: the same rate that predicts today's recommendation also predicts how far out each container is.",
+  "charts.dtf.histogramTitle": "Predicted days to full — distribution",
+  "charts.dtf.count": "{n} series with an estimate",
+  "charts.dtf.bin": "≤ {n} d",
+  "charts.dtf.binMore": "> 365 d",
+  "charts.fill.basis":
+    "Histogram bars are [predicted] estimates derived from emptying-record rates — see the §1.5 caveat above; the curve is a drawing, not data.",
+  "charts.trap.title": "The trap in same-day demand-driven collection",
+  "charts.trap.legendDemand": "Demand-driven, same-day (no spacing) [predicted]",
+  "charts.trap.caption":
+    "What this shows: truck-days per day — the fixed cycle needs few trucks most days but huge peaks; collecting everything the day it is due clusters the work into fewer, overloaded days. Why it matters: day spreading flattens the peaks (the plan card below).",
+  "charts.trap.basis": "Simulation based on historical rates, not a prediction of reality — [predicted].",
+  "charts.outcomes.title": "Outcomes",
+  "charts.outcomes.cost": "−{pct} cost over the window",
+  "charts.outcomes.eur": "−{eur} EUR",
+  "charts.outcomes.service": "{overflow} simulated overflow · today's anchor {pct} [observed]",
+  "charts.outcomes.basis":
+    "Derived from the observed baseline and the day_spread plan (§5.2.6) — a model comparison, never a measured saving.",
+
 
   "overview.money.title": "The money story: observed operation vs plan",
   "overview.money.caption":
@@ -357,6 +334,8 @@ const en = {
   "overview.state.comparisonNoDataset":
     "No dataset loaded — the comparison becomes available after loading data.",
   "overview.state.daysToFullLoading": "Computing days-to-full estimates",
+  "overview.state.simulationLoading": "Loading the observed daily rhythm",
+  "overview.state.simulationError": "Could not load the daily simulation",
   "overview.state.scenariosLoading": "Computing today-vs-plan comparison",
   "overview.state.scenariosError": "Could not compute the today-vs-plan comparison",
   "overview.state.scenariosNoDataset":
@@ -600,59 +579,36 @@ const de: Record<TranslationKey, string> = {
   "overview.calmnote":
     "Hinweis: Standorte, Fahrzeuge und Dichten in diesem Prototyp sind Demo-Annahmen. Entfernungen sind Luftlinien-Schätzungen — keine echten Straßen-Kilometer.",
 
-  "overview.presentation.open": "Präsentation",
-  "presentation.stepOf": "Schritt {i} von {n}",
-  "presentation.hint": "← → zum Blättern · Esc schließt",
-  "presentation.close": "Schließen",
-  "presentation.unavailable": "Daten für diesen Schritt nicht verfügbar.",
-  "presentation.bundle.error":
-    "Mitgelieferte Präsentationsdaten fehlen oder sind ungültig — die Präsentation kann nicht starten.",
-  "presentation.bundle.hint":
-    "Problem mit dem Capture-Bundle: {detail}. Bitte frontend/src/test/fixtures/real-capture/presentation/ wiederherstellen und die App neu bauen.",
-  "presentation.s1.title": "Warum wir hier sind",
-  "presentation.s1.basis":
-    "Alle Zahlen dieser Präsentation sind aus echten Daten vorberechnet (erfasst am {date}) — beobachtete Daten, Prognosen und Demo-Annahmen bleiben auf jeder Folie gelabelt.",
-  "presentation.s2.title": "Heute beobachtet",
-  "presentation.s2.note":
-    "der Leerungsdaten mit Füllstand ab {thr} % (Schwelle: Demo-Annahme)",
-  "presentation.s2.basis": "Basis: beobachtete Leerungsdaten [beobachtet].",
-  "presentation.s2.chartCaption": "Leerungs-Besuche pro Tag [beobachtet]",
-  "presentation.s2.median": "Median {n} pro aktivem Tag",
-  "presentation.s3.title": "Wie es funktioniert",
-  "presentation.s3.illustration": "Illustration — keine Daten",
-  "presentation.s3.fillTrigger": "Füllstand steigt → 80 %-Schwelle → geleert (Reset)",
-  "presentation.s3.histogramTitle": "Prognostizierte Tage bis voll",
-  "presentation.s3.histogramCount": "{n} Serien [Prognose]",
-  "presentation.s3.bin30": "≤30",
-  "presentation.s3.bin60": "31–60",
-  "presentation.s3.bin90": "61–90",
-  "presentation.s3.bin120": "91–120",
-  "presentation.s3.bin180": "121–180",
-  "presentation.s3.bin365": "181–365",
-  "presentation.s3.binMore": ">365",
-  "presentation.s3.basis": "Basis: prognostiziert aus Leerungsdaten — keine Messungen.",
-  "presentation.s4.title": "Die Falle: Same-Day-Service bündelt die Lkw",
-  "presentation.s4.legendFixed": "Fester Zyklus (Status quo) [Prognose]",
-  "presentation.s4.legendDemand": "Bedarfsorientiert, gleicher Tag (ohne Staffelung) [Prognose]",
-  "presentation.s4.caption":
-    "Der Same-Day-Service bündelt Besuche auf wenige Tage — die Lkw-Tage häufen sich in Spitzen, obwohl weniger Sammlungen stattfinden. Ohne Tagesverteilung kostet bedarfsorientiert mehr, nicht weniger.",
-  "presentation.s4.basis": "Basis: Simulation auf beobachteten Raten — keine Vorhersage der Realität.",
-  "presentation.s5.title": "Unser Plan — die Geld-Geschichte",
-  "presentation.s5.saved":
-    "≈ {eur} EUR niedriger (−{pct} Kosten, abgeleitet) — bei besserem Service.",
-  "presentation.s5.truckDays": "Lkw-Tage: {from} → {to}",
-  "presentation.s5.trucksPerDay": "Lkw pro Tag: üblich {typical} · Spitze {peak}",
-  "presentation.s5.basis":
-    "Basis: beobachtete Leerungsdaten × repräsentatives Zeitmodell · Plan = Simulation auf beobachteten Raten, keine Vorhersage.",
-  "presentation.s6.title": "Was das bedeutet",
-  "presentation.s6.outcomeCost": "niedrigere Kosten im Fenster (abgeleitet: Basis − Plan ÷ Basis)",
-  "presentation.s6.outcomeEur": "eingespart im Fenster (abgeleitet)",
-  "presentation.s6.outcomeService":
-    "simulierter Überlauf — gegenüber {anchor} beobachteten Leerungs-Ereignissen voll oder übervoll [beobachtet]",
-  "presentation.s6.basis":
-    "Aus echten Daten vorberechnet (erfasst am {date}). Labels: [beobachtet] × repräsentatives Zeitmodell · [Prognose] Simulation — nie eine Messung.",
-  "presentation.calmbasis":
-    "Alle Werte gelabelt: beobachtet · Prognose · [Demo-Annahme]. Aus echten Daten vorberechnet (erfasst am {date}); Details stehen in den Dashboard-Ansichten.",
+  // §6 v5: die Story-Diagramme leben auf der Übersichtsseite, gespeist aus der
+  // Live-API — die Ehrlichkeits-Labels bleiben unverändert.
+  "charts.observed.title": "Der beobachtete Rhythmus der Leerungsdaten",
+  "charts.observed.caption":
+    "Was das zeigt: Leerungsdaten pro Tag über das beobachtete Fenster. Warum das zählt: die Arbeit kommt natürlich in Spitzen — ein Plan muss die Spitzen auffangen, nicht spiegeln.",
+  "charts.observed.median": "Median pro aktivem Tag: {n}",
+  "charts.observed.basis": "Grundlage: beobachtete Leerungsdaten [beobachtet] — nur aktive Tage.",
+  "charts.fill.title": "Wie schnell Behälter voll werden",
+  "charts.fill.illustration": "Illustration — keine Daten",
+  "charts.fill.trigger": "Leerungs-Auslöser {pct} % [Demo-Annahme]",
+  "charts.fill.curveCaption":
+    "Was das zeigt: die modellierte Füllung zwischen zwei Leerungen. Warum das zählt: dieselbe Rate, die die heutige Empfehlung vorhersagt, sagt auch voraus, wie weit hinaus jeder Behälter reicht.",
+  "charts.dtf.histogramTitle": "Prognostizierte Tage bis voll — Verteilung",
+  "charts.dtf.count": "{n} Serien mit Schätzung",
+  "charts.dtf.bin": "≤ {n} T",
+  "charts.dtf.binMore": "> 365 T",
+  "charts.fill.basis":
+    "Histogramm-Balken sind [Prognose]-Schätzungen abgeleitet aus Leerungsdaten-Raten — siehe §1.5-Hinweis oben; die Kurve ist eine Zeichnung, keine Daten.",
+  "charts.trap.title": "Die Falle der bedarfsorientierten Sammeltags-Abfuhr",
+  "charts.trap.legendDemand": "Bedarfsorientiert, gleicher Tag (ohne Staffelung) [Prognose]",
+  "charts.trap.caption":
+    "Was das zeigt: Lkw-Tage pro Tag — der feste Zyklus braucht an meisten Tagen wenige Lkw, aber riesige Spitzen; alles am Fälligkeitstag zu sammeln bündelt die Arbeit in wenige, überlastete Tage. Warum das zählt: die Tagesverteilung glättet die Spitzen (Plan-Karte unten).",
+  "charts.trap.basis": "Simulation auf Basis historischer Raten, keine Vorhersage der Realität — [Prognose].",
+  "charts.outcomes.title": "Ergebnisse",
+  "charts.outcomes.cost": "−{pct} Kosten über das Fenster",
+  "charts.outcomes.eur": "−{eur} EUR",
+  "charts.outcomes.service": "{overflow} simulierter Überlauf · heutiger Anker {pct} [beobachtet]",
+  "charts.outcomes.basis":
+    "Abgeleitet aus der beobachteten Basislinie und dem day_spread-Plan (§5.2.6) — ein Modellvergleich, nie eine gemessene Einsparung.",
+
 
   "overview.money.title": "Die Geld-Geschichte: beobachteter Betrieb vs. Plan",
   "overview.money.caption":
@@ -714,6 +670,8 @@ const de: Record<TranslationKey, string> = {
   "overview.state.comparisonNoDataset":
     "Keine Daten geladen — der Vergleich ist nach dem Laden verfügbar.",
   "overview.state.daysToFullLoading": "Tage-bis-voll-Schätzungen werden berechnet",
+  "overview.state.simulationLoading": "Der beobachtete Tagesrhythmus wird geladen",
+  "overview.state.simulationError": "Die Tagessimulation konnte nicht geladen werden",
   "overview.state.scenariosLoading": "Heute-vs-Plan-Vergleich wird berechnet",
   "overview.state.scenariosError": "Heute-vs-Plan-Vergleich konnte nicht berechnet werden",
   "overview.state.scenariosNoDataset":

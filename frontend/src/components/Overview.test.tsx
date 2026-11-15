@@ -18,6 +18,7 @@ import {
   daysToFullFixture,
   scenariosFixture,
   selectionFixture,
+  simulationFixture,
   summaryFixture,
   summaryWithFillStats,
 } from "../test/fixtures";
@@ -48,8 +49,10 @@ const happyRoutes = (): Record<string, (args: FetchArgs) => Response> => ({
   "POST /api/candidates": () => jsonResponse(selectionFixture),
   "GET /api/comparison": () => jsonResponse(comparisonFixture),
   "GET /api/days-to-full": () => jsonResponse(daysToFullFixture),
-  // W1/W2 toggle card (server defaults, empty body).
+  // W1/W2 toggle card + §6 v5 story charts (server defaults, empty body).
   "POST /api/scenarios": () => jsonResponse(scenariosFixture),
+  // §6 v5 story: observed rhythm timeline + trap chart (§5.2.5 v5 replay).
+  "POST /api/simulation": () => jsonResponse(simulationFixture),
 });
 
 const emptySummary: DatasetSummary | null = null;
@@ -688,6 +691,121 @@ describe("Overview — M18 wording fixes", () => {
     );
     expect(document.querySelector('[data-testid="recommendation-examples"]')).toBeNull();
     expect(document.body.textContent).not.toContain("Could not compute the recommendation");
+  });
+});
+
+describe("Overview — §6 v5 story charts (presentation→Overview restructure)", () => {
+  it("renders observed timeline, fill story, trap chart and outcomes from the live responses", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    // Narrative order (user decision): today → how it works → the trap →
+    // plan/money → outcomes. Verify DOM order via document positions.
+    const ids = [
+      "recommendation",
+      "story-observed",
+      "how-strip",
+      "story-fill",
+      "story-trap",
+      "money-story",
+      "story-outcomes",
+    ];
+    const root = document.querySelector('[data-testid="overview-root"]');
+    for (let i = 1; i < ids.length; i += 1) {
+      const a = root?.querySelector(`[data-testid="${ids[i - 1]}"]`);
+      const b = root?.querySelector(`[data-testid="${ids[i]}"]`);
+      expect(a, ids[i - 1]).not.toBeNull();
+      expect(b, ids[i]).not.toBeNull();
+      // A precedes B iff the FOLLOWING bit is set.
+      expect(
+        a!.compareDocumentPosition(b!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${ids[i - 1]} before ${ids[i]}`,
+      ).toBeTruthy();
+    }
+
+    // Observed rhythm chart — median derived from the response (57).
+    const observed = document.querySelector('[data-testid="story-observed"]')?.textContent ?? "";
+    expect(observed).toContain("The observed rhythm of emptying records");
+    expect(observed).toContain("Median per active day: 57");
+    expect(observed).toContain("observed emptying records [observed]");
+
+    // Fill story — illustration label + histogram count from the API series.
+    const fill = document.querySelector('[data-testid="story-fill"]')?.textContent ?? "";
+    expect(fill).toContain("Illustration — not data");
+    expect(fill).toContain("1 series with an estimate");
+    expect(fill).toContain("predicted");
+
+    // Trap chart — both legend labels + simulation basis.
+    const trap = document.querySelector('[data-testid="story-trap"]')?.textContent ?? "";
+    expect(trap).toContain("Modelled 28-day cycle [demo assumption]");
+    expect(trap).toContain("Demand-driven, same-day (no spacing) [predicted]");
+    expect(trap).toContain("Simulation based on historical rates");
+
+    // Outcomes — derived from the money responses (90,500 EUR / 34.6 %).
+    const outcomes = document.querySelector('[data-testid="story-outcomes"]')?.textContent ?? "";
+    expect(outcomes).toContain("−34.6 cost over the window");
+    expect(outcomes).toContain("−90,500 EUR");
+    expect(outcomes).toContain("0.0 % simulated overflow");
+    expect(outcomes).toContain("anchor 26.9 % [observed]");
+    expect(outcomes).toContain("never a measured saving");
+  });
+
+  it("shows the simulation loading state, then the empty note on 404 (§5.3)", async () => {
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/simulation": () => jsonResponse({ detail: "no dataset" }, 404),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const observed = document.querySelector('[data-testid="story-observed"]')?.textContent ?? "";
+    expect(observed).toContain("available after loading data");
+    expect(observed).not.toContain("Median per active day");
+  });
+
+  it("shows a story error state on a malformed simulation payload (never crashes)", async () => {
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/simulation": () => jsonResponse({ status: "ok" }),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryFixture}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const observed = document.querySelector('[data-testid="story-observed"]')?.textContent ?? "";
+    expect(observed).toContain("Could not load the daily simulation");
+    expect(observed).toContain("missing observed_days/strategies");
+    expect(document.querySelector('[data-testid="overview-root"]')).not.toBeNull();
   });
 });
 

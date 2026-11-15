@@ -43,6 +43,15 @@ after loading the demo dataset (`POST /api/datasets/demo`; the same
   FIRST; see `v4/README.md`). The earlier v3-era root `comparison.json`
   (3-scenario order, no status-quo row) was **removed 2026-11-15 (M18)** —
   nothing imported it; the v4 capture supersedes it.
+- `v4/simulation.json` — `POST /api/simulation` 200 (§5.2.5 v5, 229
+  observed_days + both 349-day strategy replays; see `v4/README.md`).
+  Since the presentation→Overview restructure (2026-11-15) this is also the
+  **test fixture for the Overview story charts** (observed-visits timeline,
+  trap truck-days). The separate `presentation/` capture bundle
+  (5 JSONs + README, statically imported by `lib/presentationData.ts`) was
+  **removed 2026-11-15** together with PresentationMode — `simulation.json`
+  was value-identical to `v4/simulation.json`, the other four were unused
+  after the bundle loader was deleted.
 
 Earlier **v2-era** versions of `config.json`/`route.json`/`comparison.json`
 (container 1,900 L, service 10 min, solver_time_limit 5 s, 63-truck fleet,

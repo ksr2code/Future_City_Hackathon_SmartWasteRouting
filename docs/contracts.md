@@ -774,7 +774,8 @@ observed_baseline = { basis: "observed_emptying_records",
   `day_spread` = [predicted — simulation on observed rates]. Overrides
   (`select_threshold_pct`, service/travel/disposal/shift/cost knobs) apply to
   both and are echoed in `config_echo` as before.
-- Frontend presentation bundles must be regenerated after this lands (§6 v5).
+- Frontend note (superseded 2026-11-15): presentation bundles no longer exist —
+  the Overview page consumes these endpoints live (§6).
 
 ### 5.2.5 Multi-month simulation (v4, user-approved 2026-11-14)
 
@@ -845,11 +846,13 @@ SimulationResponse = {
   visible; [representative] / [literature] / [demo assumption] remain
   distinguishable in the assumptions panel.
 - Presentation mode may hide technical detail but never honesty labels.
-- **Presentation data mode (v5, user-approved 2026-11-15):** presentation
-  slides read **bundled verbatim API captures** — precalculated from the real
-  dataset, capture date recorded in the fixture — with **zero live network
-  calls while presenting**. Slide wording must say "precalculated from real
-  data (captured YYYY-MM-DD)", never "live". Bundled captures are committed
-  fixtures containing API outputs/aggregates only (raw CSV and the host's
-  coordinates JSON stay untracked); loading is bounded — a missing/invalid
-  capture renders a visible error, never an endless spinner.
+- **Presentation data mode (v5, user-approved 2026-11-15; SUPERSEDED same day,
+  user decision):** the separate fullscreen PresentationMode is **removed** —
+  the Overview page itself is the pitch. The slide charts (observed-visits
+  timeline, fill-curve illustration + days-to-full histogram, "the trap"
+  truck-days chart, money story) live on Overview as story sections fed by the
+  **live API** under the app's normal loading/empty/error conventions; the
+  demo runs live (previous "Mode A offline from captures" no longer applies).
+  Chart rules carry over unchanged: every chart keeps its [observed] /
+  [predicted] / [demo assumption] labels, figures come from API responses
+  only (never hardcoded), and cost is never shown without service (§6).
