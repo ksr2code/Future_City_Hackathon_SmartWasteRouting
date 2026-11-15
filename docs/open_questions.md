@@ -30,8 +30,9 @@ about the fill data itself live in `docs/data_profile.md` §13.
 | Q7 | Road-network matrix or measured travel times? | haversine straight-line × 1.4 — never presented as road distance [demo assumption] |
 | Q8 | Disposal/yard unload duration? | 30 min per disposal visit [demo assumption] |
 | Q9 | The challenge provider announced a **second key graph** beside "average filling time per material" but never specified it — which one? | none (awaiting answer) |
-| Q10 | What is the city's actual emptying schedule/frequency per site (the fixed-frequency baseline's k)? | k = 28 days uniform [demo assumption — observed median record gap] |
+| Q10 | What is the city's actual emptying schedule/frequency per site (the fixed-frequency strategy's k)? | k = 28 days uniform [demo assumption — observed median record gap]. **M17 note (2026-11-15): the observed emptying history itself (`docs/schedule_profile.md`) is now the status-quo baseline proxy — the 28-day cycle is used only inside the `fixed_frequency` strategy (§5.2.4); the observed baseline and truck estimate never assume it (§4.8).** |
 | Q11 | Do sites carry multiple igloos of the **same** colour (invisible in the data — one series per location+colour [observed])? | 1 igloo per series; `containers_per_series` knob 1..n [demo assumption] |
+| Q12 | Mapping between the 109 host-supplied real site `poi_id`s and the fill data's 449 UUID `location_id`s (counts differ — are the CSV's locations finer-grained, or a wider area?)? | none — series placement stays synthetic (user decision 2026-11-15); real-road routing blocked until answered |
 
 Answered/clarified additionally (14 Nov 2026):
 

@@ -5,6 +5,7 @@ import {
   fetchDaysToFull,
   MATERIAL_TYPES,
   runCandidates,
+  runScenarios,
   type ComparisonMethod,
   type ComparisonResponse,
   type ComparisonScenario,
@@ -12,6 +13,7 @@ import {
   type DatasetSummary,
   type FillStats,
   type FleetBudget,
+  type ScenarioResponse,
   type SelectionResponse,
 } from "../lib/api";
 import { formatKg, formatLitres, formatMetres, formatMinutes, formatPct } from "../lib/format";
@@ -172,6 +174,31 @@ function validFleetBudget(budget: FleetBudget | null | undefined): FleetBudget |
 }
 
 /**
+ * Defensive §5.2.6 guard for the money story — the day_spread strategy and
+ * the observed_baseline block must be present and numeric; a malformed
+ * payload hides the card (never fabricated numbers).
+ */
+function validMoneyScenarios(payload: ScenarioResponse | null): ScenarioResponse | null {
+  if (payload === null) return null;
+  const spread = payload.strategies.find((s) => s.id === "day_spread");
+  if (spread === undefined || !isFiniteNumber(spread.cost_eur_total) || !isFiniteNumber(spread.truck_days)) {
+    return null;
+  }
+  const baseline = payload.observed_baseline;
+  if (
+    baseline === null ||
+    baseline === undefined ||
+    baseline.basis !== "observed_emptying_records" ||
+    !isFiniteNumber(baseline.truck_days) ||
+    !isFiniteNumber(baseline.cost_eur_total) ||
+    !isFiniteNumber(baseline.median_trucks_per_active_day)
+  ) {
+    return null;
+  }
+  return payload;
+}
+
+/**
  * Defensive §5.2.3 v2 stats_by_material guard (W3 tanks): all three materials
  * must carry finite series counts; median_days may be null (no estimate) —
  * the tank for that material degrades to "—" instead of being dropped.
@@ -225,6 +252,12 @@ export function Overview({
   const [daysToFull, setDaysToFull] = useState<DaysToFullResponse | null>(null);
   const [daysToFullLoading, setDaysToFullLoading] = useState(false);
   const [daysToFullError, setDaysToFullError] = useState<string | null>(null);
+
+  // §5.2.6 money story (POST /api/scenarios): observed_baseline + day_spread.
+  const [moneyScenarios, setMoneyScenarios] = useState<ScenarioResponse | null>(null);
+  const [moneyLoading, setMoneyLoading] = useState(false);
+  const [moneyError, setMoneyError] = useState<string | null>(null);
+  const [moneyNotFound, setMoneyNotFound] = useState(false);
 
   // W5: presentation mode overlay (opened from the hero button).
   const [presentationOpen, setPresentationOpen] = useState(false);
@@ -351,6 +384,46 @@ export function Overview({
     };
   }, [hasDataset, datasetVersion, recalculateKey]);
 
+  // §5.2.6 money story — observed baseline vs day_spread plan. 404 before a
+  // dataset is a state fact (empty card note), never an error.
+  useEffect(() => {
+    if (!hasDataset) {
+      setMoneyScenarios(null);
+      setMoneyNotFound(false);
+      setMoneyError(null);
+      return;
+    }
+    let cancelled = false;
+    setMoneyLoading(true);
+    setMoneyNotFound(false);
+    setMoneyError(null);
+    runScenarios({})
+      .then((payload) => {
+        if (cancelled) return;
+        if (validMoneyScenarios(payload) === null) {
+          setMoneyScenarios(null);
+          setMoneyError("Unexpected /api/scenarios response shape (missing day_spread/baseline)");
+          return;
+        }
+        setMoneyScenarios(payload);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setMoneyScenarios(null);
+        if (err instanceof ApiError && err.status === 404) {
+          setMoneyNotFound(true);
+        } else {
+          setMoneyError(err instanceof ApiError ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMoneyLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDataset, datasetVersion, recalculateKey]);
+
   const fillStats = validFillStats(summary);
   const selected = selection?.selected ?? [];
   const skipped = selection?.skipped ?? [];
@@ -378,6 +451,25 @@ export function Overview({
   const dtfStats = validDaysToFull(daysToFull)?.stats ?? null;
   // v3 fleet budget — validated once, reused by guard and card body.
   const fleetBudget = validFleetBudget(comparisonValid?.fleet_budget ?? null);
+  // §5.2.6 money story — observed baseline vs day_spread plan; savings are
+  // derived only (baseline total − plan total), never a measured fact.
+  const moneyValid = validMoneyScenarios(moneyScenarios);
+  const moneyBaseline = moneyValid?.observed_baseline ?? null;
+  const moneySpread = moneyValid?.strategies.find((s) => s.id === "day_spread") ?? null;
+  const moneyAnchorPct =
+    moneyValid !== null && isFiniteNumber(moneyValid.observed_anchor.share_full_or_overfull_pct)
+      ? `${moneyValid.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
+      : null;
+  const moneySavedEur =
+    moneyBaseline !== null &&
+    moneySpread !== null &&
+    moneySpread.cost_eur_total <= moneyBaseline.cost_eur_total
+      ? moneyBaseline.cost_eur_total - moneySpread.cost_eur_total
+      : null;
+  const moneySavedPct =
+    moneySavedEur !== null && moneyBaseline !== null && moneyBaseline.cost_eur_total > 0
+      ? (moneySavedEur / moneyBaseline.cost_eur_total) * 100
+      : null;
   // §6: service anchor rendered beside every cost row in the comparison card.
   const serviceAnchor = validServiceAnchor(comparisonValid?.observed_service_anchor);
   // W3 tanks: per-material filling times from the §5.2.3 v2 payload.
@@ -630,6 +722,150 @@ export function Overview({
               />
               <p className="text-xs leading-relaxed text-slate-500">
                 {t(lang, "overview.recommendation.caption")}
+              </p>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* §5.2.6 money story: observed operation vs spread plan — cost always
+          with service (§6); savings derived from the response, never hardcoded. */}
+      {!summaryLoading && summaryError === null && hasDataset ? (
+        <section className="rounded-lg border border-emerald-200 bg-white p-4 shadow-sm" data-testid="money-story">
+          <h3 className="text-base font-semibold text-slate-900">
+            {t(lang, "overview.money.title")}
+          </h3>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            {t(lang, "overview.money.caption")}
+          </p>
+
+          {moneyLoading ? (
+            <div className="mt-3"><LoadingState label={t(lang, "overview.state.scenariosLoading")} /></div>
+          ) : null}
+          {moneyError !== null && !moneyLoading ? (
+            <div className="mt-3"><ErrorState label={t(lang, "overview.state.scenariosError")} hint={moneyError} /></div>
+          ) : null}
+          {!moneyLoading && moneyError === null && (moneyNotFound || !hasDataset) ? (
+            <div className="mt-3"><EmptyState label={t(lang, "overview.state.scenariosNoDataset")} /></div>
+          ) : null}
+
+          {moneyBaseline !== null && moneySpread !== null && !moneyLoading ? (
+            <div className="mt-3 space-y-2">
+              <div className="grid gap-3 md:grid-cols-2">
+                {/* Observed operation — [observed × representative time model]; service = observed anchor. */}
+                <div className="rounded border border-slate-300 bg-slate-50 px-3 py-2" data-testid="money-baseline">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    {t(lang, "overview.money.observedTitle")}
+                  </p>
+                  <p className="mt-1 text-2xl font-bold text-slate-900">
+                    {moneyBaseline.cost_eur_total.toLocaleString("en-US")} EUR
+                  </p>
+                  <p className="mt-0.5 text-xs font-semibold text-sky-900">
+                    {t(lang, "overview.toggle.serviceFull")}:{" "}
+                    {moneyAnchorPct ?? "— %"}{" "}
+                    <span className="font-normal text-slate-500">
+                      ({t(lang, "overview.money.observedServiceBasis")})
+                    </span>
+                  </p>
+                  <dl className="mt-1 space-y-0.5 text-xs text-slate-600">
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.toggle.truckDays")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneyBaseline.truck_days.toLocaleString("en-US")}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.medianTrucks")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneyBaseline.median_trucks_per_active_day.toLocaleString("en-US")}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.peakTrucks")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneyBaseline.peak_trucks.toLocaleString("en-US")}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.activeDays")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {`${moneyBaseline.active_days.toLocaleString("en-US")} / ${moneyBaseline.calendar_days.toLocaleString("en-US")}`}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.perYear")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneyBaseline.cost_eur_per_year_predicted.toLocaleString("en-US", { maximumFractionDigits: 0 })}{" "}
+                        EUR/year
+                      </dd>
+                    </div>
+                    {moneyBaseline.capacity_infeasible_days > 0 ? (
+                      <div className="flex justify-between gap-2">
+                        <dt>{t(lang, "overview.money.infeasibleDays")}</dt>
+                        <dd className="font-semibold text-amber-700">
+                          {moneyBaseline.capacity_infeasible_days.toLocaleString("en-US")}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                  <p className="mt-1 text-xs text-slate-500">{t(lang, "overview.money.basisObserved")}</p>
+                </div>
+
+                {/* Plan (day_spread) — [predicted — simulation on observed rates]; service beside cost. */}
+                <div className="rounded border border-emerald-300 bg-emerald-50 px-3 py-2" data-testid="money-plan">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                    {t(lang, "overview.money.planTitle")}
+                  </p>
+                  <p className="mt-1 text-2xl font-bold text-emerald-800">
+                    {moneySpread.cost_eur_total.toLocaleString("en-US")} EUR
+                  </p>
+                  <p className="mt-0.5 text-xs font-semibold text-sky-900">
+                    {t(lang, "overview.toggle.overflow")}:{" "}
+                    {isFiniteNumber(moneySpread.service.overflow_share_pct)
+                      ? `${moneySpread.service.overflow_share_pct.toFixed(1)} %`
+                      : "— %"}{" "}
+                    · {t(lang, "overview.toggle.maxFill")}:{" "}
+                    {isFiniteNumber(moneySpread.service.max_fill_pct)
+                      ? `${moneySpread.service.max_fill_pct.toFixed(1)} %`
+                      : "— %"}
+                  </p>
+                  <dl className="mt-1 space-y-0.5 text-xs text-slate-600">
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.toggle.truckDays")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneySpread.truck_days.toLocaleString("en-US")}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.typicalTrucks")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {isFiniteNumber(moneySpread.typical_trucks_per_day)
+                          ? moneySpread.typical_trucks_per_day.toLocaleString("en-US")
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t(lang, "overview.money.perYear")}</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {moneySpread.cost_eur_per_year.toLocaleString("en-US", { maximumFractionDigits: 0 })}{" "}
+                        EUR/year
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="mt-1 text-xs text-slate-500">{t(lang, "overview.money.basisPlan")}</p>
+                </div>
+              </div>
+
+              {moneySavedEur !== null && moneySavedPct !== null ? (
+                <p className="text-sm font-semibold text-emerald-800" data-testid="money-savings">
+                  {tf(lang, "overview.money.saved", {
+                    eur: moneySavedEur.toLocaleString("en-US"),
+                    pct: `${moneySavedPct.toFixed(1)} %`,
+                  })}
+                </p>
+              ) : null}
+              <p className="text-xs leading-relaxed text-slate-500">
+                {t(lang, "overview.money.note")}
               </p>
             </div>
           ) : null}

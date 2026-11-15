@@ -44,10 +44,12 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-/** Defensive §5.2.4 payload guard — malformed responses degrade, never crash. */
+/** Defensive §5.2.4 payload guard — malformed responses degrade, never crash.
+ *  §5.2.6: the strategies array is additive (day_spread joined); require the
+ *  two ids this component renders, tolerate extra rows. */
 function validScenarios(payload: ScenarioResponse | null): ScenarioResponse | null {
   if (payload === null) return null;
-  if (!Array.isArray(payload.strategies) || payload.strategies.length !== 2) return null;
+  if (!Array.isArray(payload.strategies) || payload.strategies.length < 2) return null;
   if (strategyById(payload, "fixed_frequency") === null) return null;
   if (strategyById(payload, "demand_driven") === null) return null;
   const anchor = payload.observed_anchor;

@@ -471,10 +471,12 @@ export const daysToFullFixture: DaysToFullResponse = {
 };
 
 /**
- * §5.2.4 ScenarioResponse (v4) — mirrors the verbatim real capture
- * (frontend/src/test/fixtures/real-capture/v4/scenarios.json): cost AND
- * service always together (§6); demand_driven honestly costs MORE than
- * fixed_frequency while its service is better (max fill 80.0 = threshold).
+ * §5.2.4/§5.2.6 ScenarioResponse (v5) — mirrors the verbatim real capture
+ * (frontend/src/test/fixtures/real-capture/v4/scenarios.json, captured
+ * 2026-11-15): cost AND service always together (§6); demand_driven honestly
+ * costs MORE than fixed_frequency while its service is better (max fill 80.0
+ * = threshold); §5.2.6 adds the day_spread strategy + observed_baseline
+ * status-quo block (values verbatim from the live capture).
  */
 export const scenariosFixture: ScenarioResponse = {
   strategies: [
@@ -504,6 +506,24 @@ export const scenariosFixture: ScenarioResponse = {
         max_fill_pct: 80.0,
       },
     },
+    {
+      id: "day_spread",
+      truck_days: 342,
+      stops_total: 9237,
+      cost_eur_total: 171000.0,
+      cost_eur_per_year: 97994.27,
+      service: {
+        basis: "simulated",
+        overflow_share_pct: 0.0,
+        share_emptyings_full_or_overfull_pct: 0.0,
+        max_fill_pct: 88.9,
+      },
+      peak_trucks_per_day: 1,
+      typical_trucks_per_day: 1.0,
+      stops_per_truck_day: 28,
+      deferrals_total: 29401,
+      max_deferral_days: 29,
+    },
   ],
   skipped_series: [
     {
@@ -516,6 +536,18 @@ export const scenariosFixture: ScenarioResponse = {
     basis: "observed_emptying_records",
     share_full_or_overfull_pct: 26.9,
     max_fill_pct: 100.0,
+  },
+  observed_baseline: {
+    basis: "observed_emptying_records",
+    active_days: 229,
+    calendar_days: 349,
+    visits_total: 11701,
+    truck_days: 523,
+    cost_eur_total: 261500.0,
+    cost_eur_per_year_predicted: 273488.54,
+    median_trucks_per_active_day: 2.0,
+    peak_trucks: 5,
+    capacity_infeasible_days: 0,
   },
   config_echo: {
     frequency_days: 28,
@@ -552,6 +584,13 @@ export const simulationFixture: SimulationResponse = {
   start_date: "2025-10-17",
   end_date: "2026-09-30",
   data_basis: { records: "observed", rates: "derived", plan: "simulated" },
+  // §5.2.5 v5 observed visit counts (active days only) — traced to the real
+  // capture (v4/simulation.json, 2026-11-15): first/last/max days.
+  observed_days: [
+    { date: "2025-10-17", collections: 23 },
+    { date: "2025-11-14", collections: 127 },
+    { date: "2026-09-30", collections: 57 },
+  ],
   strategies: [
     {
       id: "fixed_frequency",

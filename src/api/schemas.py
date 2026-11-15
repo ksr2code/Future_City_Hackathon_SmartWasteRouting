@@ -600,6 +600,50 @@ class ScenarioStrategyResponse(BaseModel):
     service: ScenarioServiceBlock
 
 
+class DaySpreadStrategyResponse(BaseModel):
+    """§5.2.6 the third strategy row: all §5.2.4 fields (same formulas and
+    rounding so the three strategies stay comparable) plus the §4.8 scheduler
+    explainers. ``typical_trucks_per_day`` is the median trucks over ACTIVE
+    days (a range beside the peak, never a claimed fleet size — Q1);
+    ``max_deferral_days`` is ``None`` iff nothing was ever deferred; the
+    planner is unbounded, so peaks raise the day's truck count instead of
+    dropping stops. [predicted — simulation on observed rates]."""
+
+    id: Literal["day_spread"]
+    truck_days: int
+    stops_total: int
+    cost_eur_total: float
+    cost_eur_per_year: float
+    service: ScenarioServiceBlock
+    peak_trucks_per_day: int | None  # max trucks_used over active days; None iff no stops
+    typical_trucks_per_day: float | None  # median trucks_used over active days
+    stops_per_truck_day: int  # §4.8 daily capacity echo (shift/travel/disposal derivation)
+    deferrals_total: int  # series-day deferral events (capacity deferrals, §4.8)
+    max_deferral_days: int | None  # longest wait a due series incurred; None iff no deferral
+
+
+class ObservedBaselineResponse(BaseModel):
+    """§5.2.6 status-quo column: the observed emptying schedule itself
+    (§1.5: one record = one emptying record) through the §4.8 per-truck time
+    model. ``truck_days``/``cost_eur_total`` cover feasible active days over
+    the observed window; ``cost_eur_per_year_predicted`` is the
+    x365/calendar_days extrapolation [predicted] (never the §4.6 200-day
+    cost rate). ``median_trucks_per_active_day``/``peak_trucks`` are a range,
+    not a claimed fleet size; ``capacity_infeasible_days`` is surfaced, never
+    coerced (§4.8). Labels [observed x representative time model]."""
+
+    basis: Literal["observed_emptying_records"]
+    active_days: int  # distinct dates with >= 1 visit
+    calendar_days: int  # inclusive observed window span (annualisation divisor)
+    visits_total: int
+    truck_days: int  # sum of per-day trucks_needed over feasible active days (§4.8)
+    cost_eur_total: float  # truck_days x cost_per_truck_day_eur
+    cost_eur_per_year_predicted: float  # x365/calendar_days extrapolation [predicted]
+    median_trucks_per_active_day: float | None  # None iff no feasible active day
+    peak_trucks: int | None  # max per-day trucks_needed; None iff no feasible active day
+    capacity_infeasible_days: int  # active days with no feasible truck count (§4.8)
+
+
 class SimulationConfigEcho(BaseModel):
     """Effective simulation inputs after applying overrides (§5.3 echo rule:
     every response echoes its effective config)."""
@@ -623,11 +667,15 @@ class SimulationConfigEcho(BaseModel):
 
 class ScenarioResponse(BaseModel):
     """§5.2.4 response: both strategies' cost + service, the observed
-    service anchor, the effective config echo and assumption labels."""
+    service anchor, the effective config echo and assumption labels.
+    §5.2.6 (additive): a third ``day_spread`` strategy row (in the fixed
+    order fixed_frequency → demand_driven → day_spread) and the
+    ``observed_baseline`` status-quo block beside them."""
 
-    strategies: list[ScenarioStrategyResponse]
-    skipped_series: list[SkippedSeriesResponse]  # identical set for both strategies
+    strategies: list[DaySpreadStrategyResponse | ScenarioStrategyResponse]
+    skipped_series: list[SkippedSeriesResponse]  # identical set for all strategies
     observed_anchor: ObservedAnchorResponse
+    observed_baseline: ObservedBaselineResponse  # §5.2.6 status-quo column
     config_echo: SimulationConfigEcho
     assumptions: list[str]
 
@@ -640,6 +688,16 @@ class SimulationDayRecord(BaseModel):
     overflow_containers: int
     truck_days: int
     cumulative_cost_eur: float
+
+
+class SimulationObservedDayRecord(BaseModel):
+    """§5.2.5 v5 one observed day beside the simulated replay — per-day
+    visit count from the emptying records (§1.5: one record = one visit)
+    [observed]. Active days only: zero-visit dates are absent by design
+    (§4.8), never fabricated as 0."""
+
+    date: date
+    collections: int
 
 
 class SimulationStrategyResponse(BaseModel):
@@ -672,6 +730,7 @@ class SimulationResponse(BaseModel):
     start_date: date
     end_date: date
     data_basis: SimulationDataBasis
+    observed_days: list[SimulationObservedDayRecord]  # v5: observed timeline [observed]
     strategies: list[SimulationStrategyResponse]
     calibration: CalibrationResponse
     skipped_series: list[SkippedSeriesResponse]

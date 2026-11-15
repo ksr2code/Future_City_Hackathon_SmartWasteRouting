@@ -215,6 +215,34 @@ BOM; 449 unique `Location_id`s; materials brown/green/white; dates
 - This file contains **no** coordinates/depot/fleet inputs — M8 must source them
   separately and label them as assumptions until the challenge host supplies data.
 
+## 19. Host coordinates JSON inventory (observed, added 2026-11-15 M17-P0)
+
+`data/raw/heilbronn_actual_glass_containers_locations.json` — supplied by the
+challenge host (contracts §4.5 update); **untracked** (gitignored via
+`data/raw/`), like the CSV. Observed with
+`python3 -c "import json;d=json.load(open('data/raw/heilbronn_actual_glass_containers_locations.json',encoding='utf-8'))"`
+style inspection (never dumped whole).
+
+- One JSON array of **109 items** (27,866 bytes; UTF-8); 0 duplicate `poi_id`.
+- Fields per item (all present on all 109):
+  `poi_id` (int, range 3383–6798), `street_name` (str),
+  `utm_x` (float, 507,757–518,781), `utm_y` (float, 5,440,075–5,449,580),
+  `latitude` (float, 49.113393–49.198923), `longitude` (float, 9.10645–9.257475),
+  `city` (str, only `"Heilbronn"`), `layer` (str, only
+  `"altglascontainerstandorte"`).
+- Coordinate sanity: WGS84 lat/lon ranges sit inside Heilbronn; UTM x/y are
+  consistent with the same area (zone 32U implied by magnitude, not stored).
+- **No join key**: `poi_id` is an integer site id with no correspondence to the
+  449 UUID `location_id`s of the CSV (109 sites vs 449 locations / 1,338
+  series). Consequence (contracts §4.5 update / open question Q12): the JSON
+  is **unused for series placement** — series coordinates stay synthetic
+  SHA-256-derived (`src/routing/geography.py`, M8) and distances stay
+  haversine-derived; real-road routing is blocked until a mapping exists.
+- Consumer for M17-P1/P2: observed service schedule lives in
+  `docs/schedule_profile.md` (per-series visits/year, per-day visits, weekday
+  profile — all [observed], reproducible via
+  `.venv/bin/python -m src.analytics.schedule`).
+
 ## Open-question protocol
 
 None of §13 is resolved by guessing. Answers should come from the challenge

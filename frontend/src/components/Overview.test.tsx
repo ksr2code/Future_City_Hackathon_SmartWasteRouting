@@ -520,6 +520,110 @@ describe("Overview — filling-time tanks (W3, §5.2.3 v2 stats_by_material)", (
   });
 });
 
+describe("Overview — §5.2.6 money story card", () => {
+  it("renders observed baseline vs day_spread plan with derived savings and service beside cost (§6)", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const card = document.querySelector('[data-testid="money-story"]');
+    expect(card).not.toBeNull();
+    const baseline = document.querySelector('[data-testid="money-baseline"]')?.textContent ?? "";
+    expect(baseline).toContain("Observed operation");
+    expect(baseline).toContain("261,500 EUR"); // observed_baseline.cost_eur_total
+    expect(baseline).toContain("523"); // truck-days
+    expect(baseline).toContain("26.9 %"); // observed anchor = service beside cost (§6)
+    expect(baseline).toContain("observed × representative time model");
+    const plan = document.querySelector('[data-testid="money-plan"]')?.textContent ?? "";
+    expect(plan).toContain("171,000 EUR"); // day_spread.cost_eur_total
+    expect(plan).toContain("0.0 %"); // simulated overflow beside cost (§6)
+    expect(plan).toContain("88.9 %"); // max simulated fill
+    expect(plan).toContain("simulation on observed rates");
+    // Derived: (261,500 − 171,000) / 261,500 = 34.6 % — never hardcoded.
+    const savings = document.querySelector('[data-testid="money-savings"]')?.textContent ?? "";
+    expect(savings).toContain("90,500");
+    expect(savings).toContain("34.6 %");
+    expect(savings).toContain("derived");
+  });
+
+  it("renders the money story in German with parity", async () => {
+    stubRoutes(happyRoutes());
+    render(
+      <Overview
+        lang="de"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+
+    const card = document.querySelector('[data-testid="money-story"]')?.textContent ?? "";
+    expect(card).toContain("Die Geld-Geschichte: beobachteter Betrieb vs. Plan");
+    expect(card).toContain("Beobachteter Betrieb");
+    expect(card).toContain("Unser Plan: bedarfsorientiert + Tagesverteilung");
+    const savings = document.querySelector('[data-testid="money-savings"]')?.textContent ?? "";
+    expect(savings).toContain("niedriger über das Fenster (−34.6 % Kosten, abgeleitet)");
+  });
+
+  it("shows the empty state on 404 and an error on a malformed payload (never fabricated numbers)", async () => {
+    // 404 (no dataset server-side) → empty note, not an error.
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/scenarios": () => jsonResponse({ detail: "no dataset" }, 404),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={0}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+    let card = document.querySelector('[data-testid="money-story"]')?.textContent ?? "";
+    expect(card).not.toContain("261,500 EUR");
+    cleanup();
+
+    // Malformed payload → explicit error, no numbers.
+    stubRoutes({
+      ...happyRoutes(),
+      "POST /api/scenarios": () => jsonResponse({ status: "ok" }),
+    });
+    render(
+      <Overview
+        lang="en"
+        summary={summaryWithFillStats}
+        summaryLoading={false}
+        summaryError={null}
+        datasetVersion={1}
+        onDemoLoaded={() => {}}
+      />,
+    );
+    await flush();
+    await flush();
+    card = document.querySelector('[data-testid="money-story"]')?.textContent ?? "";
+    expect(card).toContain("Could not compute the today-vs-plan comparison");
+    expect(card).not.toContain("261,500 EUR");
+  });
+});
+
 describe("Overview — App.test-style {status:\"ok\"} mocks never crash", () => {
   it("degrades gracefully when every endpoint returns {status:\"ok\"} and the summary is shapeless", async () => {
     vi.stubGlobal(

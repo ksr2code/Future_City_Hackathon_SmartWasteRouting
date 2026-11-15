@@ -1,6 +1,6 @@
-# Demo numbers — comparison + scenario engine (v4)
+# Demo numbers — comparison + scenario engine + observed baseline (v5)
 
-v3 parameter change (2026-11-14), superseded in v4 only by the density source and the new fixed-frequency scenario: the comparison runs on the §4.6 v3 representative parameters — container_volume_litres=3000 [representative], stop_service_minutes=5 [representative], travel_time_mode=fixed_per_leg with fixed_travel_minutes=10 on every leg [representative + interpretation], cost_per_truck_day_eur=500, operating_days_per_week=5, operating_days_per_year=200 [representative] — alongside the unchanged [demo assumption] values (vehicle 12,000 L / 10,000 kg x 3; densities 0.40 kg/litre — [literature] German AVV table AVV 20 01 02 (entsorgen-versorgen.de, retrieved 2026-11-14); disposal unload 30 min, shift 480 min, geography knobs, solver budget). All numbers below supersede the v2 demo numbers, which remain recorded in docs/PROGRESS.md (M12/M13 history) only. Cost figures are [predicted] derivations, never invoiced amounts (§4.4).
+v3 parameter change (2026-11-14), superseded in v4 only by the density source and the new fixed-frequency scenario: the comparison runs on the §4.6 v3 representative parameters — container_volume_litres=3000 [representative], stop_service_minutes=5 [representative], travel_time_mode=fixed_per_leg with fixed_travel_minutes=10 on every leg [representative + interpretation], cost_per_truck_day_eur=500, operating_days_per_week=5, operating_days_per_year=200 [representative] — alongside the unchanged [demo assumption] values (vehicle 12,000 L / 10,000 kg x 3; densities 0.40 kg/litre — [literature] German AVV table AVV 20 01 02 (entsorgen-versorgen.de, retrieved 2026-11-14); disposal unload 30 min, shift 480 min, geography knobs, solver budget). All numbers below supersede the v2 demo numbers, which remain recorded in docs/PROGRESS.md (M12/M13 history) only. v5 (M17, 2026-11-15): the observed emptying schedule itself becomes the status-quo baseline (§4.8) and the `day_spread` strategy joins the scenario engine (§5.2.6) — both in the live-appended sections below. Cost figures are [predicted] derivations, never invoiced amounts (§4.4).
 
 Reproducing command: `python -m src.api.compare_demo` (writes `docs/demo_numbers.md`; optional overrides `--data PATH --output PATH --as-of YYYY-MM-DD --horizon N`)
 
@@ -153,23 +153,41 @@ Different served-stop counts across scenarios are inherent — normalise with th
 - Unserved stops are never silently dropped (contract §4.4); the generated solution objects carry a deterministic reason per stop.
 - This section below is appended from the live API (the CLI writes only the comparison above) — after a CLI regeneration, re-add it from the same curls.
 
-## Scenario engine (§5.2.4 — cost AND service level, always together)
+## Scenario engine (§5.2.4/§5.2.6 — cost AND service level, always together)
 
-Values from a live run on the same demo dataset and defaults (2026-11-14): `curl -X POST localhost:8002/api/scenarios -d '{}'`. Both strategies replay the observed window (2025-10-17..2026-09-30, 349 days) on per-series fill-at-emptying rates (§5.2.3 [predicted]), §4.6 physics with flat 10-min legs (§4.4 — visiting order cannot change duration, so no solver runs here), density 0.40 kg/litre [literature AVV 20 01 02], 500 EUR/truck-day [representative]. Deterministic.
+Values from a live run on the same demo dataset and defaults (2026-11-15): `curl -X POST localhost:8050/api/scenarios -d '{}'`. Three strategies replay the observed window (2025-10-17..2026-09-30, 349 days) on per-series fill-at-emptying rates (§5.2.3 [predicted]) under §4.6 physics with flat 10-min legs (§4.4 — visiting order cannot change duration, so no solver runs here), density 0.40 kg/litre [literature AVV 20 01 02], 500 EUR/truck-day [representative]. Deterministic.
 
 | strategy | emptyings (stops) | truck-days | cost total [predicted] | cost/year [predicted] | overflow share (container-days) | simulated emptyings full/overfull | max fill |
 |---|---|---|---|---|---|---|---|
 | `fixed_frequency` (every frequency_days=28 [demo assumption — real schedule unknown, Q10]) | 15,636 | 852 | 426,000 EUR | 244,126.07 EUR | 2.4 % | 14.4 % | 366.4 % |
 | `demand_driven` (predicted fill ≥ select_threshold_pct=80 [demo assumption §3.1]) | 9,993 | 1,040 | 520,000 EUR | 297,994.27 EUR | 0.0 % | 0.0 % | 80.0 % |
+| `day_spread` (§4.8 scheduler: empty when projected fill ≥ 80 %, capacity-capped at 28 stops/truck-day, least-urgent due series deferred — never overflowed) | 9,237 | 342 | 171,000 EUR | 97,994.27 EUR | 0.0 % | 0.0 % | 88.9 % |
 
-Observed service anchor (§4.7/§5.2.4) [observed]: 26.9 % of emptying records full or overfull (numeric ≥ 100 or the overfull token over all 11,701 records); max observed numeric fill 100.0 % — the reference both strategies are judged against.
+`day_spread` scheduler echoes (§5.2.6): peak 1 truck/day, typical 1.0 trucks/active day, `stops_per_truck_day` 28 = floor((480 − 2×10 − 30)/(5+10)) from the §4.6 values, 29,401 capacity deferrals with a longest wait of 29 days — deferral is surfaced, never a silent drop, and overflow is never accepted. [predicted — simulation on observed rates]
 
-Reading the table (§6 honesty rule — cost is never shown without its service column): `fixed_frequency` is **cheaper** (852 vs 1,040 truck-days) but serves **worse** — 2.4 % of container-days overflow (10,812 overflow container-days in the replay) and one in seven simulated emptyings at/overfull. `demand_driven` eliminates overflow entirely (max fill exactly the 80 % trigger) yet **costs MORE**: its emptyings cluster onto the same days (rate-synchronised series come due together), so peak days need more trucks despite fewer total emptyings. Neither strategy beats the anchor's 26.9 % cost-neutrally — the trade-off is the honest result.
+Observed service anchor (§4.7/§5.2.4) [observed]: 26.9 % of emptying records full or overfull (numeric ≥ 100 or the overfull token over all 11,701 records); max observed numeric fill 100.0 % — the reference all strategies are judged against.
+
+Reading the table (§6 honesty rule — cost is never shown without its service column): `fixed_frequency` is cheaper than `demand_driven` (852 vs 1,040 truck-days) but serves worse — 2.4 % of container-days overflow (10,812 overflow container-days in the replay) and one in seven simulated emptyings at/overfull; `demand_driven` eliminates overflow (max fill exactly the 80 % trigger) yet **costs more** because its emptyings cluster onto rate-synchronised peak days. `day_spread` keeps demand-driven timing but spreads the due work across days (deferrals instead of peak truck counts), so it is the cheapest of the three **and** overflow-free — the only strategy that beats the fixed cycle on both axes.
+
+## Observed baseline — the status quo in money terms (§5.2.6/§4.8, M17)
+
+Same live run, `observed_baseline` block: the **observed emptying schedule itself** (`docs/schedule_profile.md`, [observed]) put through the §4.8 truck-day arithmetic — no assumed cycle, no simulation.
+
+| metric | value |
+|---|---|
+| basis | `observed_emptying_records` [observed × representative time model] |
+| active days / calendar days | 229 / 349 (120 zero-visit days are never counted as service days) |
+| visits (emptying records) | 11,701 |
+| truck-days | 523 |
+| cost total | 261,500 EUR (523 × 500 EUR/truck-day [representative]) |
+| cost per year | 273,488.54 EUR [predicted — ×365/349 calendar extrapolation] |
+| trucks per active day | median 2, peak 5 — a range, **not** a claimed fleet size (real fleet unknown, Q1) |
+| capacity-infeasible days | 0 (surfaced per §4.8, never coerced) |
+
+Per-truck arithmetic (§4.8, flat mode, per active day): with the §4.6 defaults — 5 min service, 10 min travel on every leg, 30 min disposal per truck, 480 min shift — the inequality `15·visits + 50·t ≤ 480·t` closes to `t = ⌈15·visits/430⌉`; truck-days = Σ t over the 229 active days. [observed visit counts × representative time model]
+
+**Honest reading — the money story (§6)**: the `day_spread` plan costs **171,000 EUR vs the observed schedule's 261,500 EUR over the same window — −90,500 EUR ≈ −35 % (derived from this live run: −34.6 %)** — **with better service, not worse**: the plan's overflow share is 0.0 % of container-days and 0.0 % of simulated emptyings at/overfull (max fill 88.9 %), while the observed schedule's own service level is the anchor — 26.9 % of emptying records full or overfull [observed]. The saving comes from spreading work across days (plan peak 1 truck/day vs observed peak 5) and emptying before containers reach full, instead of paying for peak-day staffing on a schedule that still lets one in four records reach full/overfull. Annualisation bases differ by contract (§5.2.6): strategy `cost_eur_per_year` uses the 200 operating days × window ratio, the baseline's `cost_eur_per_year_predicted` uses ×365/349 — compare the same-window totals above, never the two per-year columns against each other.
 
 ## Simulation replay (§5.2.5) and the replay-initialisation rule
 
-`curl -X POST localhost:8002/api/simulation -d '{}'` (same defaults): start 2025-10-17, end 2026-09-30; data basis records=observed, rates=derived, plan=simulated; totals reconcile with the scenario table above (fixed_frequency 15,636 emptyings / 852 truck-days / 426,000 EUR final cumulative cost; demand_driven 9,993 / 1,040 / 520,000 EUR).
-
-**Replay initialisation (§5.2.5 addendum)**: each series' simulated clock starts at its **latest record ≤ `start_date`** (past-only, leakage-safe); a series with no record ≤ `start_date` starts at `start_date` with fill 0. The globally-latest record must NOT seed the clock — it lies at/near the window end and would deaden the early replay (observed before the fix: 4 dead months, status-quo cost understated ~15×); a mapped date after `start_date` is a `SimulationConfigError` — honest failure, never a silent clamp.
-
-Model consequence [observed live run, labelled in the UI timeline]: the 1,303 series with a pre-window record all seed on the same day, so `fixed_frequency` synchronises onto ~12 "mega-days" of ~1,303 emptyings each (peak day 2025-11-14 with 1,303) — a replay artefact of the initialisation rule, not observed behaviour. Calibration echo (§5.2.5): simulated fill-at-emptying median 42.5 % vs observed 60.0 % — the rate model's sanity gap, shown in TechDetails.
+`curl -X POST localhost:8050/api/simulation -d '{}'` (re-verified live 2026-11-15, same defaults): start 2025-10-17, end 2026-09-30; data basis records=observed, rates=derived, plan=simulated; totals reconcile with the scenario table above (fixed_frequency 15,636 emptyings / 852 truck-days / 426,000 EUR final cumulative cost; demand_driven 9,993 / 1,040 / 520,000 EUR; the timeline covers the two §5.2.4 replay strategies — `day_spread` and the observed baseline are scenario-engine outputs, §5.2.6).

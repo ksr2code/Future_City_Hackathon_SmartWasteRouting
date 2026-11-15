@@ -3,6 +3,7 @@ import {
   ApiError,
   runScenarios,
   runSimulation,
+  type ObservedBaselineBlock,
   type ScenarioResponse,
   type ScenarioStrategy,
   type SimulationResponse,
@@ -48,14 +49,26 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-/** Defensive §5.2.4 payload guard — malformed responses degrade, never crash. */
+/** Defensive §5.2.4/§5.2.6 payload guard — malformed responses degrade, never crash. */
 function validScenarios(payload: ScenarioResponse | null): ScenarioResponse | null {
   if (payload === null) return null;
-  if (!Array.isArray(payload.strategies) || payload.strategies.length !== 2) return null;
+  if (!Array.isArray(payload.strategies) || payload.strategies.length !== 3) return null;
   const ids = payload.strategies.map((s) => s.id).sort();
-  if (ids[0] !== "demand_driven" || ids[1] !== "fixed_frequency") return null;
+  if (ids[0] !== "day_spread" || ids[1] !== "demand_driven" || ids[2] !== "fixed_frequency") {
+    return null;
+  }
   const anchor = payload.observed_anchor;
   if (anchor === null || anchor === undefined || anchor.basis !== "observed_emptying_records") {
+    return null;
+  }
+  const baseline = payload.observed_baseline;
+  if (
+    baseline === null ||
+    baseline === undefined ||
+    baseline.basis !== "observed_emptying_records" ||
+    !isFiniteNumber(baseline.truck_days) ||
+    !isFiniteNumber(baseline.cost_eur_total)
+  ) {
     return null;
   }
   return payload;
@@ -92,17 +105,22 @@ function StrategyCard({
   lang,
   strategy,
   testid,
+  titleKey,
 }: {
   lang: Lang;
   strategy: ScenarioStrategy;
   testid: string;
+  titleKey: TranslationKey;
 }) {
   const service = strategy.service;
   const num = (v: number | null, digits = 1): string =>
     isFiniteNumber(v) ? `${v.toFixed(digits)} %` : "— %";
   return (
     <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2" data-testid={testid}>
-      <p className="text-base font-bold text-slate-900">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {t(lang, titleKey)}
+      </p>
+      <p className="mt-1 text-base font-bold text-slate-900">
         {strategy.cost_eur_total.toLocaleString("en-US")} EUR{" "}
         <span className="text-xs font-medium text-slate-500">
           {t(lang, "overview.toggle.costWindow")}
@@ -140,8 +158,115 @@ function StrategyCard({
             {strategy.stops_total.toLocaleString("en-US")}
           </dd>
         </div>
+        {isFiniteNumber(strategy.peak_trucks_per_day) ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.spread.peakTrucks")}</dt>
+            <dd className="font-semibold text-slate-800">
+              {strategy.peak_trucks_per_day.toLocaleString("en-US")}
+            </dd>
+          </div>
+        ) : null}
+        {isFiniteNumber(strategy.typical_trucks_per_day) ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.spread.typicalTrucks")}</dt>
+            <dd className="font-semibold text-slate-800">
+              {strategy.typical_trucks_per_day.toLocaleString("en-US")}
+            </dd>
+          </div>
+        ) : null}
+        {isFiniteNumber(strategy.stops_per_truck_day) ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.spread.stopsPerTruckDay")}</dt>
+            <dd className="font-semibold text-slate-800">
+              {strategy.stops_per_truck_day.toLocaleString("en-US")}
+            </dd>
+          </div>
+        ) : null}
+        {isFiniteNumber(strategy.deferrals_total) && isFiniteNumber(strategy.max_deferral_days) ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.spread.deferrals")}</dt>
+            <dd className="font-semibold text-slate-800">
+              {`${strategy.deferrals_total.toLocaleString("en-US")} (${t(lang, "scenarios.spread.maxSuffix")} ${strategy.max_deferral_days.toLocaleString("en-US")} d)`}
+            </dd>
+          </div>
+        ) : null}
       </dl>
       <p className="mt-1 text-xs text-slate-500">{t(lang, "overview.toggle.simBasis")}</p>
+    </div>
+  );
+}
+
+/**
+ * §5.2.6 status-quo column: observed emptying records under the
+ * representative time model. §6: cost never without service — the service
+ * level beside the cost is the observed anchor ([observed]).
+ */
+function BaselineCard({ lang, baseline, anchorPct }: {
+  lang: Lang;
+  baseline: ObservedBaselineBlock;
+  anchorPct: string | null;
+}) {
+  return (
+    <div className="rounded border border-slate-300 bg-white px-3 py-2" data-testid="scenarios-baseline">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {t(lang, "scenarios.baseline.title")}
+      </p>
+      <p className="mt-1 text-base font-bold text-slate-900">
+        {baseline.cost_eur_total.toLocaleString("en-US")} EUR{" "}
+        <span className="text-xs font-medium text-slate-500">
+          {t(lang, "overview.toggle.costWindow")}
+        </span>
+      </p>
+      <p className="text-xs text-slate-700">
+        {t(lang, "overview.toggle.costYear")}:{" "}
+        {baseline.cost_eur_per_year_predicted.toLocaleString("en-US", { maximumFractionDigits: 0 })}{" "}
+        EUR/year
+      </p>
+      <dl className="mt-1 space-y-0.5 text-xs text-slate-600">
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "overview.toggle.serviceFull")}</dt>
+          <dd className="font-semibold text-slate-800">{anchorPct ?? "— %"}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "overview.toggle.truckDays")}</dt>
+          <dd className="font-semibold text-slate-800">
+            {baseline.truck_days.toLocaleString("en-US")}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "scenarios.baseline.medianTrucks")}</dt>
+          <dd className="font-semibold text-slate-800">
+            {baseline.median_trucks_per_active_day.toLocaleString("en-US")}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "scenarios.baseline.peakTrucks")}</dt>
+          <dd className="font-semibold text-slate-800">
+            {baseline.peak_trucks.toLocaleString("en-US")}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "scenarios.baseline.activeDays")}</dt>
+          <dd className="font-semibold text-slate-800">
+            {`${baseline.active_days.toLocaleString("en-US")} / ${baseline.calendar_days.toLocaleString("en-US")}`}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>{t(lang, "scenarios.baseline.visits")}</dt>
+          <dd className="font-semibold text-slate-800">
+            {baseline.visits_total.toLocaleString("en-US")}
+          </dd>
+        </div>
+        {baseline.capacity_infeasible_days > 0 ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.baseline.infeasibleDays")}</dt>
+            <dd className="font-semibold text-amber-700">
+              {baseline.capacity_infeasible_days.toLocaleString("en-US")}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      <p className="mt-1 text-xs text-slate-500">{t(lang, "scenarios.baseline.basis")}</p>
     </div>
   );
 }
@@ -229,6 +354,8 @@ export function ScenariosPanel({
 
   const today = strategyById(scenarioData, "fixed_frequency");
   const plan = strategyById(scenarioData, "demand_driven");
+  const spread = strategyById(scenarioData, "day_spread");
+  const baseline = scenarioData?.observed_baseline ?? null;
   const anchorPct =
     scenarioData !== null && isFiniteNumber(scenarioData.observed_anchor.share_full_or_overfull_pct)
       ? `${scenarioData.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
@@ -328,7 +455,7 @@ export function ScenariosPanel({
           <div className="mt-3"><EmptyState label={t(lang, "scenarios.noDataset")} /></div>
         ) : null}
 
-        {scenarioData !== null && today !== null && plan !== null && !running ? (
+        {scenarioData !== null && today !== null && plan !== null && spread !== null && baseline !== null && !running ? (
           <div className="mt-3 space-y-2">
             <p
               className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900"
@@ -339,9 +466,27 @@ export function ScenariosPanel({
                 : t(lang, "overview.toggle.anchorUnavailable")}{" "}
               <span className="font-normal">{t(lang, "overview.toggle.anchorBasis")}</span>
             </p>
-            <div className="grid gap-3 md:grid-cols-2">
-              <StrategyCard lang={lang} strategy={today} testid="scenarios-strategy-fixed" />
-              <StrategyCard lang={lang} strategy={plan} testid="scenarios-strategy-demand" />
+            {/* §5.2.6: status-quo baseline column beside the three strategies. */}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <BaselineCard lang={lang} baseline={baseline} anchorPct={anchorPct} />
+              <StrategyCard
+                lang={lang}
+                strategy={today}
+                testid="scenarios-strategy-fixed"
+                titleKey="overview.toggle.today"
+              />
+              <StrategyCard
+                lang={lang}
+                strategy={plan}
+                testid="scenarios-strategy-demand"
+                titleKey="overview.toggle.plan"
+              />
+              <StrategyCard
+                lang={lang}
+                strategy={spread}
+                testid="scenarios-strategy-spread"
+                titleKey="scenarios.spreadLabel"
+              />
             </div>
             <TechDetails label={t(lang, "techdetails.label")} testid="scenarios-tech-details">
               {scenarioData.config_echo !== null && scenarioData.config_echo !== undefined ? (

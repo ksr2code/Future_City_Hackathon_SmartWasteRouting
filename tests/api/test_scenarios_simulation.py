@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.api.conftest import upload_csv
+
 SIM_CSV = """Location_id,material_type,date,fill_level_perc
 loc-sim,green,2026-01-01,0
 loc-sim,green,2026-01-05,20
@@ -128,7 +130,11 @@ def test_scenarios_strategies_hand_reckoned(client: TestClient) -> None:
         {"frequency_days": FREQUENCY_DAYS, "simulation_days": SIMULATION_DAYS},
     )
     strategies = {strategy["id"]: strategy for strategy in body["strategies"]}
-    assert set(strategies) == {"fixed_frequency", "demand_driven"}
+    assert [strategy["id"] for strategy in body["strategies"]] == [
+        "fixed_frequency",
+        "demand_driven",
+        "day_spread",
+    ]  # §5.2.6 fixed ordering
 
     fixed = strategies["fixed_frequency"]
     # Arithmetic: see module block (3 emptyings -> 3 truck-days).
@@ -155,6 +161,26 @@ def test_scenarios_strategies_hand_reckoned(client: TestClient) -> None:
     assert demand["service"]["overflow_share_pct"] == 0.0  # 55 <= 100
     assert demand["service"]["share_emptyings_full_or_overfull_pct"] is None  # no emptyings
     assert demand["service"]["max_fill_pct"] == 55.0
+
+    # §5.2.6 day_spread (§4.8 scheduler, same threshold/window physics):
+    # due iff projected fill >= 80 -> needs 16 days at 5 pp/day; the 12-day
+    # window never reaches it -> honest zeros, no fabricated work.
+    spread = strategies["day_spread"]
+    assert spread["stops_total"] == 0
+    assert spread["truck_days"] == 0
+    assert spread["cost_eur_total"] == 0.0
+    assert spread["cost_eur_per_year"] == 0.0
+    assert spread["service"] == {
+        "basis": "simulated",
+        "overflow_share_pct": 0.0,
+        "share_emptyings_full_or_overfull_pct": None,  # no emptyings
+        "max_fill_pct": 55.0,
+    }
+    assert spread["peak_trucks_per_day"] is None  # no active day
+    assert spread["typical_trucks_per_day"] is None
+    assert spread["stops_per_truck_day"] == 28  # floor((480 - 2x10 - 30) / (5 + 10))
+    assert spread["deferrals_total"] == 0
+    assert spread["max_deferral_days"] is None  # nothing was ever deferred
 
     # Observed anchor over the fixture's 3 records: none >= 100/overfull
     # -> 0.0 %; max numeric fill 20.0 (loc-sim 2026-01-05).
@@ -269,3 +295,57 @@ def test_policy_threshold_override_moves_demand_driven(client: TestClient) -> No
     assert demand["service"]["max_fill_pct"] == 5.0  # end-of-day: due days reset to 0
     assert demand["service"]["share_emptyings_full_or_overfull_pct"] == 0.0  # 0 of 5
     assert strategies["fixed_frequency"]["stops_total"] == 3  # threshold-independent
+
+
+# --- §5.2.5 v5 observed_days (M17-P5) ----------------------------------------
+
+OBS_CSV = """Location_id,material_type,date,fill_level_perc
+loc-a,green,2026-01-01,10
+loc-a,brown,2026-01-01,20
+loc-a,green,2026-01-04,30
+loc-b,white,2026-01-09,40
+"""
+# Visits: 2026-01-01 carries TWO (loc-a green + loc-a brown — distinct
+# series), 01-04 one; 01-09 lies OUTSIDE the 5-day window below. Rates:
+# loc-a green 30 % / 3 d = 10.0 pp/day (single candidate); loc-a brown and
+# loc-b white have one record each -> skipped (not_enough_records).
+
+
+def test_observed_days_counts_filtering_ordering(client: TestClient) -> None:
+    """§5.2.5 v5: observed_days = per-day observed visit counts over the
+    SAME replay window [observed] — multi-visit days aggregate across
+    series (01-01 -> 2), zero-visit days (01-02/03/05) are absent, days
+    outside the window (01-09) are excluded, ascending order."""
+    upload_csv(client, OBS_CSV)
+    body = _post(client, "/api/simulation", {"simulation_days": 5})
+    assert body["start_date"] == "2026-01-01"  # dataset date_min
+    assert body["end_date"] == "2026-01-05"  # start + 5 - 1
+    assert body["observed_days"] == [
+        {"date": "2026-01-01", "collections": 2},
+        {"date": "2026-01-04", "collections": 1},
+    ]
+    # The simulated strategy rows are untouched (byte-identical shape pins).
+    for strategy in body["strategies"]:
+        for record in strategy["days"]:
+            assert list(record) == [
+                "date",
+                "collections",
+                "overflow_containers",
+                "truck_days",
+                "cumulative_cost_eur",
+            ]
+
+
+def test_observed_days_default_window_covers_whole_span(client: TestClient) -> None:
+    """Default window = the observed span: every active day appears, and the
+    collections total equals n_rows (one record = one visit, §1.5)."""
+    upload_csv(client, OBS_CSV)
+    body = _post(client, "/api/simulation", {})
+    assert body["start_date"] == "2026-01-01"
+    assert body["end_date"] == "2026-01-09"
+    assert body["observed_days"] == [
+        {"date": "2026-01-01", "collections": 2},
+        {"date": "2026-01-04", "collections": 1},
+        {"date": "2026-01-09", "collections": 1},
+    ]
+    assert sum(day["collections"] for day in body["observed_days"]) == 4

@@ -19,11 +19,18 @@ captures, not from docs alone). Observed data, not synthetic.
   gains −72,398 / +456,846 / +384,448 m; `fleet_budget` demo_truck ×99 →
   49,500 EUR/day / 9,900,000 EUR/year; `observed_service_anchor`
   (26.9 % full-or-overfull, basis `observed_emptying_records`) beside cost.
-- `scenarios.json` — `POST /api/scenarios` 200 (defaults), §5.2.4:
+- `scenarios.json` — `POST /api/scenarios` 200 (defaults), §5.2.4+§5.2.6
+  (**regenerated 2026-11-15 for v5**, M17-P2b): three strategies —
   `fixed_frequency` (852 truck-days, 426,000 EUR, overflow 2.4 %) vs
   `demand_driven` (1,040 truck-days, 520,000 EUR, overflow 0.0 %,
-  max fill 80.0) — demand_driven costs MORE (honest tradeoff shown in UI);
+  max fill 80.0 — demand_driven costs MORE, honest tradeoff shown in UI) —
+  plus `day_spread` (342 truck-days, 171,000 EUR, 9,237 stops, peak 1,
+  typical 1.0 trucks/day, 28 stops/truck-day, deferrals 29,401 / max 29 d,
+  overflow 0.0 %, max fill 88.9 %); top-level `observed_baseline`
+  (523 truck-days, 261,500 EUR, per-year 273,488.54, median 2 / peak 5,
+  229/349 active days, 11,701 visits, 0 capacity-infeasible days);
   `observed_anchor` 26.9 %, `config_echo`, 35 `skipped_series`.
+  Existing strategy rows byte-identical to the 2026-11-14 capture.
 - `simulation.json` — `POST /api/simulation` 200 (defaults), §5.2.5:
   daily replay 2025-10-17 → 2026-09-30 (349 days), `data_basis`
   {records: observed, rates: derived, plan: simulated}, per-strategy

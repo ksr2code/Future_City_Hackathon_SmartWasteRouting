@@ -129,6 +129,23 @@ describe("ScenariosPanel — results (§6 cost + service together)", () => {
     expect(demand).toContain("520,000 EUR");
     expect(demand).toContain("0.0 %");
 
+    // §5.2.6 day_spread row + observed_baseline status-quo column.
+    const spread = document.querySelector('[data-testid="scenarios-strategy-spread"]')?.textContent ?? "";
+    expect(spread).toContain("Our plan: demand-driven + day spreading"); // renamed label
+    expect(spread).toContain("171,000 EUR");
+    expect(spread).toContain("88.9 %"); // max simulated fill beside cost (§6)
+    expect(spread).toContain("28"); // stops per truck-day
+    const demandCard = document.querySelector('[data-testid="scenarios-strategy-demand"]')?.textContent ?? "";
+    expect(demandCard).toContain("Demand-driven, same-day (no spacing)"); // renamed label
+    const baseline = document.querySelector('[data-testid="scenarios-baseline"]')?.textContent ?? "";
+    expect(baseline).toContain("Observed operation");
+    expect(baseline).toContain("261,500 EUR");
+    expect(baseline).toContain("523"); // truck-days
+    expect(baseline).toContain("26.9 %"); // observed anchor beside cost (§6)
+    expect(baseline).toContain("observed × representative time model");
+    const cards = document.querySelectorAll('[data-testid="scenarios-baseline"], [data-testid="scenarios-strategy-spread"]');
+    expect(cards).toHaveLength(2);
+
     const details = document.querySelector(
       '[data-testid="scenarios-tech-details"]',
     ) as HTMLDetailsElement | null;

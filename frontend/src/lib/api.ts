@@ -703,14 +703,47 @@ export interface SkippedSeries {
   reason: string;
 }
 
-/** §5.2.4 one strategy's cost + service aggregates ([predicted] derivations). */
+/**
+ * §5.2.4 one strategy's cost + service aggregates ([predicted] derivations).
+ * §5.2.6 adds `day_spread` with scheduler-only aggregates (absent on the
+ * other two strategies — optional here).
+ */
 export interface ScenarioStrategy {
-  id: "fixed_frequency" | "demand_driven";
+  id: "fixed_frequency" | "demand_driven" | "day_spread";
   truck_days: number;
   stops_total: number;
   cost_eur_total: number;
   cost_eur_per_year: number;
   service: ScenarioServiceBlock;
+  /** §5.2.6 day_spread: peak trucks on any single day. */
+  peak_trucks_per_day?: number;
+  /** §5.2.6 day_spread: typical (median) trucks per active day. */
+  typical_trucks_per_day?: number;
+  /** §5.2.6 day_spread: stops per truck-day. */
+  stops_per_truck_day?: number;
+  /** §5.2.6 day_spread: emptyings deferred to a later day. */
+  deferrals_total?: number;
+  /** §5.2.6 day_spread: longest single deferral (days). */
+  max_deferral_days?: number;
+}
+
+/**
+ * §5.2.6 status-quo baseline block — observed emptying records under the
+ * representative time model; cost = truck_days × cost_per_truck_day_eur,
+ * per-year = calendar-scaled [observed × representative time model].
+ */
+export interface ObservedBaselineBlock {
+  basis: "observed_emptying_records";
+  active_days: number;
+  calendar_days: number;
+  visits_total: number;
+  truck_days: number;
+  cost_eur_total: number;
+  cost_eur_per_year_predicted: number;
+  median_trucks_per_active_day: number;
+  peak_trucks: number;
+  /** Surfaced, never coerced (§4.8). */
+  capacity_infeasible_days: number;
 }
 
 /** §5.3 effective-config echo for scenarios/simulation. */
@@ -732,11 +765,13 @@ export interface SimulationConfigEcho {
   travel_time_mode: TravelTimeMode;
 }
 
-/** §5.2.4 ScenarioResponse — cost AND service always reported together. */
+/** §5.2.4/§5.2.6 ScenarioResponse — cost AND service always reported together. */
 export interface ScenarioResponse {
   strategies: ScenarioStrategy[];
   skipped_series: SkippedSeries[];
   observed_anchor: ObservedServiceAnchor;
+  /** §5.2.6 status-quo column beside the strategies (§6: cost never without service). */
+  observed_baseline: ObservedBaselineBlock;
   config_echo: SimulationConfigEcho;
   assumptions: string[];
 }
@@ -763,11 +798,19 @@ export interface Calibration {
   observed_fill_at_emptying_median_pct: number | null;
 }
 
+/** §5.2.5 v5 observed per-day visit counts (active days only, label [observed]). */
+export interface SimulationObservedDay {
+  date: string;
+  collections: number;
+}
+
 /** §5.2.5 SimulationResponse — deterministic daily replay, no OR-Tools per day. */
 export interface SimulationResponse {
   start_date: string;
   end_date: string;
   data_basis: SimulationDataBasis;
+  /** §5.2.5 v5: observed visits per day over the same window (active days only). */
+  observed_days: SimulationObservedDay[];
   strategies: Array<{ id: "fixed_frequency" | "demand_driven"; days: SimulationDay[] }>;
   calibration: Calibration;
   skipped_series: SkippedSeries[];

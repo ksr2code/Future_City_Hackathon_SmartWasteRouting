@@ -417,6 +417,57 @@ Status quo and service level (v4, user-approved 2026-11-14):
   simulation (§5.2.4/§5.2.5) for simulated strategies. A cost advantage with
   worse service must be visibly flagged (§6) — never shown alone.
 
+### 4.8 Observed-schedule baseline & truck-day accounting (M17 v5, user-approved 2026-11-15)
+
+- **Status-quo evidence** = the observed emptying history itself: per-calendar-day
+  visit counts and per-series visit frequency from the canonical dataset
+  [observed] (profile saved to `docs/schedule_profile.md`). The fixed-k
+  `frequency_days` cycle remains only inside the §5.2.4 fixed-frequency
+  strategy [demo assumption, Q10].
+- **Truck-day accounting** (flat-mode arithmetic, deterministic; amended
+  2026-11-15 to per-truck overhead after implementer flag): per active day,
+  `trucks_needed` = smallest integer `t ≥ 1` satisfying
+  `visits × service_minutes + (visits + 2t) × fixed_travel_minutes +
+  t × disposal_service_minutes ≤ t × max_shift_minutes`
+  (each truck adds its own depot start/end legs and one disposal visit;
+  consistent with `stops_per_truck_day` in the day-spreading rules below).
+  If no `t` satisfies the inequality (per-stop time alone exceeds a shift),
+  the day is reported honestly as capacity-infeasible at these times, never
+  silently coerced. `truck_days_year = Σ trucks_needed` over active days;
+  `cost = truck_days × cost_per_truck_day_eur` [representative]. Every derived
+  figure is labelled [observed × representative time model].
+- **Fleet estimate** = the distribution of per-day `trucks_needed` (typical vs
+  peak day), reported as a range — never a single claimed fleet size (the real
+  fleet is unknown, Q1). The 3× `demo_truck` solver input stays
+  [demo assumption] and must be visually separated from this observed
+  estimate.
+- **Optimised plan (day-spreading scheduler)** — rules finalised 2026-11-15:
+  - Replay basis: the §5.2.5 simulation (per-series rates §2.3; clock = latest
+    record ≤ start; fill resets to 0 after each emptying).
+  - Trigger: a series is **due** on day d when projected fill
+    (fill 0 + rate × days since last emptying) ≥ `select_threshold_pct`
+    (default 80 [demo assumption §3.1]).
+  - Daily capacity (flat-mode arithmetic, §4.4):
+    `stops_per_truck_day = floor((max_shift_minutes − 2 × fixed_travel_minutes −
+    disposal_service_minutes) / (service_minutes + fixed_travel_minutes))`.
+  - Selection under capacity: serve due series by projected fill descending
+    (ties: rate descending, then key ascending — deterministic). Overflowing
+    capacity defers the least-urgent due series to the next day, EXCEPT series
+    whose next-day projected fill would exceed 100 % — these are served the
+    same day and may raise that day's truck count (peak staffing); overflow is
+    never accepted. Planning staffing is unbounded (cost is per truck-day
+    used); the 3× `demo_truck` demo cap does not apply here.
+  - Counting: `trucks_used(d) = ceil(stops_served(d) / stops_per_truck_day)`;
+    `truck_days = Σ trucks_used`; cost = truck_days ×
+    `cost_per_truck_day_eur` [representative]. Report typical (median active
+    day) and peak trucks, the active-days-per-week pattern, and the §5.2.4
+    service metrics (overflow container-days, share full/overfull at emptying,
+    max fill) beside every cost figure (§6).
+  - Determinism: pure function of dataset + config, no solver, no RNG. All
+    outputs labelled [predicted — simulation on observed rates]; the baseline
+    column is the observed schedule through the same arithmetic
+    [observed × representative time model].
+
 ### 4.5 Inputs still missing (ask host)
 
 Tracked in `docs/open_questions.md`: real coordinates (449 locations), depot +
@@ -424,6 +475,16 @@ disposal sites, truck capacity, waste densities, compartment layout, road
 matrix, disposal service time. Values already supplied verbally by the
 representative (14 Nov 2026) are [representative]; everything else stays
 labelled synthetic/demo until answered.
+
+Update 2026-11-15: the host supplied a coordinates JSON
+(`data/raw/heilbronn_actual_glass_containers_locations.json`, 109 real sites,
+`poi_id`/`street_name`/WGS84+UTM, layer `altglascontainerstandorte`
+[observed]). **No join key exists** between `poi_id` and the 449 UUID
+`location_id`s, and counts differ (109 sites vs 449 locations / 1,338 series).
+User decision 2026-11-15: series placement stays synthetic; the JSON is
+inventoried in `docs/data_profile.md` but unused for placement and stays
+untracked. Real-road routing is blocked on a series↔site mapping (Q12) —
+until then distances remain haversine-derived with explicit provenance.
 
 ### 4.6 Agreed defaults (v3, 2026-11-14 — representative values + demo assumptions)
 
@@ -682,6 +743,39 @@ ScenarioResponse = {
 - A strategy that lowers cost while worsening `service` must be flagged by
   the UI (§6); the API returns both, always.
 
+### 5.2.6 Observed baseline + day_spread strategy (M17 v5, user-approved 2026-11-15)
+
+Additive to §5.2.4: `POST /api/scenarios` gains a third strategy and a
+status-quo baseline block. Same parameters; deterministic; no solver runs.
+
+```text
+strategies[] gains { id: "day_spread",               # §4.8 scheduler
+                     truck_days, stops_total,
+                     cost_eur_total, cost_eur_per_year,
+                     service: { basis: "simulated", overflow_share_pct,
+                                share_emptyings_full_or_overfull_pct,
+                                max_fill_pct },
+                     peak_trucks_per_day, typical_trucks_per_day,
+                     stops_per_truck_day, deferrals_total, max_deferral_days }
+
+observed_baseline = { basis: "observed_emptying_records",
+                      active_days, calendar_days, visits_total,
+                      truck_days,                     # §4.8 per-truck arithmetic
+                      cost_eur_total,                 # truck_days × cost_per_truck_day_eur
+                      cost_eur_per_year_predicted,    # truck_days × 365/calendar_days × rate
+                      median_trucks_per_active_day, peak_trucks,
+                      capacity_infeasible_days }      # surfaced, never coerced
+```
+
+- Strategy ordering: `fixed_frequency`, `demand_driven`, `day_spread`.
+  `observed_baseline` is the status-quo column beside them; its service level
+  is `observed_anchor` (§5.2.4) — cost never without service (§6).
+- Labels: baseline = [observed × representative time model];
+  `day_spread` = [predicted — simulation on observed rates]. Overrides
+  (`select_threshold_pct`, service/travel/disposal/shift/cost knobs) apply to
+  both and are echoed in `config_echo` as before.
+- Frontend presentation bundles must be regenerated after this lands (§6 v5).
+
 ### 5.2.5 Multi-month simulation (v4, user-approved 2026-11-14)
 
 `POST /api/simulation` — daily replay for the timeline visual; same
@@ -691,6 +785,10 @@ parameters as §5.2.4.
 SimulationResponse = {
   start_date, end_date,                        # replayed window (observed span by default)
   data_basis: { records: "observed", rates: "derived", plan: "simulated" },
+  observed_days: [ { date, collections } ],    # v5 (M17-P5): per-day observed visit counts
+                                               # over the same window, active days only —
+                                               # the observed timeline beside the simulated
+                                               # plans (label [observed])
   strategies: [ { id: "fixed_frequency" | "demand_driven",
                   days: [ { date, collections, overflow_containers,
                             truck_days, cumulative_cost_eur } ] } ],
@@ -747,3 +845,11 @@ SimulationResponse = {
   visible; [representative] / [literature] / [demo assumption] remain
   distinguishable in the assumptions panel.
 - Presentation mode may hide technical detail but never honesty labels.
+- **Presentation data mode (v5, user-approved 2026-11-15):** presentation
+  slides read **bundled verbatim API captures** — precalculated from the real
+  dataset, capture date recorded in the fixture — with **zero live network
+  calls while presenting**. Slide wording must say "precalculated from real
+  data (captured YYYY-MM-DD)", never "live". Bundled captures are committed
+  fixtures containing API outputs/aggregates only (raw CSV and the host's
+  coordinates JSON stay untracked); loading is bounded — a missing/invalid
+  capture renders a visible error, never an endless spinner.

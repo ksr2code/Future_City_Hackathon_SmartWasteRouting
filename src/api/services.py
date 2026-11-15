@@ -24,6 +24,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal, TypeVar
 
+from src.analytics.schedule import per_date_visit_counts
 from src.api import hosted, schemas
 from src.api.errors import ApiError, DemoDatasetMissingError
 from src.api.state import store
@@ -66,6 +67,7 @@ from src.forecasting.days_to_full import (
 )
 from src.forecasting.features import SeriesKey, build_feature_row, group_by_series
 from src.forecasting.targets import EvaluationCase
+from src.routing.day_scheduler import SchedulerPlan, schedule_collection_days
 from src.routing.demo_config import (
     DEMO_CONTAINER_VOLUME_LITRES,
     DEMO_COST_PER_TRUCK_DAY_EUR,
@@ -93,6 +95,7 @@ from src.routing.naive import (
     naive_fixed_frequency_simulation,
     naive_sweep_simulation,
 )
+from src.routing.observed_baseline import ObservedTruckEstimate, estimate_observed_trucks
 from src.routing.schemas import (
     Depot,
     DisposalSite,
@@ -1445,6 +1448,24 @@ SIMULATION_RATES_CAVEAT = "simulation based on historical rates, not a predictio
 """§5.2.5 mandatory assumption — contract-locked VERBATIM (§6 wording)."""
 
 
+OBSERVED_BASELINE_LABEL = (
+    "[observed x representative time model] observed_baseline: the observed "
+    "emptying schedule itself through the labelled time model (§4.8); its "
+    "service level is the observed_anchor above"
+)
+"""§5.2.6 baseline label — contract wording [observed x representative time
+model] (ASCII x per architect ruling 2026-11-15; window totals, the per-year
+figure is [predicted] (extrapolation))."""
+
+
+DAY_SPREAD_LABEL = (
+    "[predicted — simulation on observed rates] day_spread: §4.8 "
+    "day-spreading scheduler replay over the same window"
+)
+"""§5.2.6 day_spread label — contract wording [predicted — simulation on
+observed rates]."""
+
+
 def _simulation_setup(
     request: schemas.ScenarioRequest,
 ) -> tuple[date, date, SimulationConfig, list[SeriesDaysToFull], dict[tuple[str, str], date]]:
@@ -1615,11 +1636,65 @@ def _skipped_rows(sim: StrategySimulation) -> list[schemas.SkippedSeriesResponse
     ]
 
 
+def _day_spread_row(
+    plan: SchedulerPlan, sim_config: SimulationConfig
+) -> schemas.DaySpreadStrategyResponse:
+    """§5.2.6 day_spread strategy row from the §4.8 scheduler plan. The
+    §5.2.4 cost fields reuse the SAME formulas as the other two strategies
+    (``cost_eur_per_year = cost_total / replay_days x
+    operating_days_per_year``, 2 d.p.) so the three rows stay comparable;
+    the scheduler explainers come verbatim from the plan."""
+    cost_eur_per_year = round(
+        plan.cost_eur_total / plan.replay_days * sim_config.operating_days_per_year, 2
+    )
+    return schemas.DaySpreadStrategyResponse(
+        id="day_spread",
+        truck_days=plan.truck_days,
+        stops_total=plan.stops_total,
+        cost_eur_total=plan.cost_eur_total,
+        cost_eur_per_year=cost_eur_per_year,
+        service=schemas.ScenarioServiceBlock(
+            overflow_share_pct=plan.service.overflow_share_pct,
+            share_emptyings_full_or_overfull_pct=plan.service.share_emptyings_full_or_overfull_pct,
+            max_fill_pct=plan.service.max_fill_pct,
+        ),
+        peak_trucks_per_day=plan.peak_trucks,
+        typical_trucks_per_day=plan.median_trucks,
+        stops_per_truck_day=plan.stops_per_truck_day,
+        deferrals_total=plan.deferrals_total,
+        max_deferral_days=plan.max_wait_days,
+    )
+
+
+def _observed_baseline_row(estimate: ObservedTruckEstimate) -> schemas.ObservedBaselineResponse:
+    """§5.2.6 status-quo block from the §4.8 observed-schedule estimate
+    (window truck-days [observed x representative time model]; the per-year
+    figure is the x365/span extrapolation [predicted])."""
+    return schemas.ObservedBaselineResponse(
+        basis="observed_emptying_records",
+        active_days=estimate.active_days,
+        calendar_days=estimate.span_days,
+        visits_total=estimate.total_visits,
+        truck_days=estimate.truck_days_window,
+        cost_eur_total=estimate.cost_eur_window,
+        cost_eur_per_year_predicted=estimate.cost_eur_calendar_year,
+        median_trucks_per_active_day=estimate.median_trucks,
+        peak_trucks=estimate.peak_trucks,
+        capacity_infeasible_days=estimate.capacity_infeasible_days,
+    )
+
+
 def run_scenarios(request: schemas.ScenarioRequest) -> schemas.ScenarioResponse:
     """§5.2.4 parameterised what-if: replay BOTH strategies over the window
     with the effective physics and report cost AND service level together
-    (§6). Deterministic; no solver runs (visiting order cannot change a
-    flat-mode day, §4.4)."""
+    (§6). §5.2.6 (additive): a third ``day_spread`` strategy (§4.8
+    day-spreading scheduler over the SAME window/config) and the
+    ``observed_baseline`` status-quo block (§4.8 observed schedule through
+    the same time model), with the fixed ordering fixed_frequency →
+    demand_driven → day_spread. Deterministic; no solver runs (visiting
+    order cannot change a flat-mode day, §4.4). Overrides flow through the
+    shared ``SimulationConfig`` into all pieces and are echoed in
+    ``config_echo`` (§5.3)."""
     start, end, sim_config, estimates, priors = _simulation_setup(request)
     fixed = simulate_strategy(
         estimates, "fixed_frequency", sim_config, start, end, prior_emptying_dates=priors
@@ -1627,20 +1702,37 @@ def run_scenarios(request: schemas.ScenarioRequest) -> schemas.ScenarioResponse:
     demand = simulate_strategy(
         estimates, "demand_driven", sim_config, start, end, prior_emptying_dates=priors
     )
+    try:
+        day_spread_plan = schedule_collection_days(
+            estimates, sim_config, start, end, prior_emptying_dates=priors
+        )
+    except ValueError as error:
+        # A shift/travel/disposal override that leaves stops_per_truck_day = 0
+        # admits no schedule at all — honest 422 with the scheduler's message,
+        # never a partial response (§5.3).
+        raise ApiError(422, str(error)) from error
+    baseline = estimate_observed_trucks(store.dataset, sim_config)
     anchor = simulate_observed_anchor(store.dataset.readings)
+    strategies: list[schemas.DaySpreadStrategyResponse | schemas.ScenarioStrategyResponse] = [
+        _strategy_row("fixed_frequency", fixed),
+        _strategy_row("demand_driven", demand),
+        _day_spread_row(day_spread_plan, sim_config),
+    ]
     return schemas.ScenarioResponse(
-        strategies=[
-            _strategy_row("fixed_frequency", fixed),
-            _strategy_row("demand_driven", demand),
-        ],
+        strategies=strategies,
         skipped_series=_skipped_rows(fixed),
         observed_anchor=schemas.ObservedAnchorResponse(
             basis=anchor.basis,
             share_full_or_overfull_pct=anchor.share_full_or_overfull_pct,
             max_fill_pct=anchor.max_fill_pct,
         ),
+        observed_baseline=_observed_baseline_row(baseline),
         config_echo=_simulation_config_echo(sim_config, (end - start).days + 1),
-        assumptions=_simulation_assumptions(sim_config),
+        assumptions=[
+            *_simulation_assumptions(sim_config),
+            OBSERVED_BASELINE_LABEL,
+            DAY_SPREAD_LABEL,
+        ],
     )
 
 
@@ -1648,7 +1740,9 @@ def run_simulation(request: schemas.SimulationRequest) -> schemas.SimulationResp
     """§5.2.5 deterministic daily replay of both strategies (no OR-Tools, no
     seasonality). Calibration: fixed_frequency's simulated fill-at-emptying
     median vs the observed numeric fill-at-emptying median (§5.2.5 sanity
-    check for TechDetails)."""
+    check for TechDetails). v5: ``observed_days`` carries the per-day
+    observed visit counts over the same window beside the simulated plans
+    [observed]."""
     start, end, sim_config, estimates, priors = _simulation_setup(request)
     fixed = simulate_strategy(
         estimates, "fixed_frequency", sim_config, start, end, prior_emptying_dates=priors
@@ -1657,6 +1751,16 @@ def run_simulation(request: schemas.SimulationRequest) -> schemas.SimulationResp
         estimates, "demand_driven", sim_config, start, end, prior_emptying_dates=priors
     )
     calib = simulate_calibration(fixed.fills_at_emptying, store.dataset.readings)
+
+    # §5.2.5 v5: the observed timeline beside the simulated days — per-day
+    # visit counts over the SAME replay window, active days only, ascending
+    # (zero-visit dates absent, never fabricated as 0) [observed].
+    per_date_counts = per_date_visit_counts(store.dataset.readings)
+    observed_days = [
+        schemas.SimulationObservedDayRecord(date=day, collections=count)
+        for day, count in sorted(per_date_counts.items())
+        if start <= day <= end
+    ]
 
     def _strategy(sim: StrategySimulation) -> schemas.SimulationStrategyResponse:
         return schemas.SimulationStrategyResponse(
@@ -1677,6 +1781,7 @@ def run_simulation(request: schemas.SimulationRequest) -> schemas.SimulationResp
         start_date=start,
         end_date=end,
         data_basis=schemas.SimulationDataBasis(),
+        observed_days=observed_days,
         strategies=[_strategy(fixed), _strategy(demand)],
         calibration=schemas.CalibrationResponse(
             simulated_fill_at_emptying_median_pct=calib.simulated_fill_at_emptying_median_pct,

@@ -1,15 +1,16 @@
-# Routing methodology (M13, refreshed for v4 semantics + scenario engine, M16)
+# Routing methodology (M13, refreshed for v4 semantics + scenario engine, M16; M17 v5: observed baseline + day-spreading scheduler)
 
 How routes are produced: inputs, distance/travel-time provenance,
 constraints, the solver setup, unserved handling, fleet sizing + cost, the
-comparison design, the scenario engine + simulation replay, and the
-days-to-full companion estimate.
-Authority: `docs/contracts.md` §4 (esp. §4.2–§4.7) and §5. Comparison demo
-numbers marked `docs/demo_numbers.md` come from the generated v4 run of
-`.venv/bin/python -m src.api.compare_demo` (2026-11-14) on the demo dataset
-(as_of 2026-09-30, horizon 28); scenario-engine/replay numbers come from
-live `POST /api/scenarios` / `POST /api/simulation` runs recorded in the
-same file.
+comparison design, the scenario engine + simulation replay + the observed
+schedule baseline and day-spreading scheduler, and the days-to-full
+companion estimate.
+Authority: `docs/contracts.md` §4 (esp. §4.2–§4.8) and §5. Comparison demo
+numbers marked `docs/demo_numbers.md` come from the generated v5 run of
+`.venv/bin/python -m src.api.compare_demo` on the demo dataset
+(as_of 2026-09-30, horizon 28); scenario-engine, observed-baseline and
+replay numbers come from live `POST /api/scenarios` / `POST /api/simulation`
+runs recorded in the same file (2026-11-15).
 
 Status legend: **[observed]** = verified in the challenge data ·
 **[predicted]** = model/solver output · **[representative]** = supplied
@@ -18,7 +19,7 @@ verbally by the challenge representative (14 Nov 2026) ·
 (written confirmation pending) · **[literature]** = sourced external
 reference (citation beside the value) · **[demo assumption]** = labelled
 synthetic value, not from data. Inputs still awaited from the host:
-`docs/open_questions.md` (Q1–Q11).
+`docs/open_questions.md` (Q1–Q12).
 
 ## 1. Distance and travel-time provenance
 
@@ -52,7 +53,7 @@ comparison response and UI label — **never presented as road distances**.
 | cost parameters | 500 EUR/truck-day, 5 days/week, 200 days/year | [representative]; derived EUR amounts [predicted] |
 | geography knobs | seed 0 (= current SHA-256 layout), spread 6 km | [demo assumption knobs] |
 | containers per series | 1 (one igloo per colour per location) | [demo assumption, Q11] |
-| collection cycle | frequency_days 28 (status-quo scenario + demand timing) | [demo assumption — observed median emptying interval; real schedule unknown, Q10] |
+| collection cycle | frequency_days 28 (fixed-frequency strategy only — since M17 the status-quo baseline is the **observed schedule itself**, §4.8, not this cycle) | [demo assumption — observed median emptying interval; the real forward schedule is unknown, Q10] |
 | solver | solution_limit 200 (primary, deterministic); time_limit 30 s (safety cap) | [demo assumption] |
 
 `GET /api/config` echoes every default with its per-field source
@@ -190,27 +191,84 @@ Reproduce the comparison: `.venv/bin/python -m src.api.compare_demo` (writes
 the comparison part of `docs/demo_numbers.md`); run the app per
 `docs/user_guide.md` §2.
 
-## 8. Scenario engine and simulation replay (v4, contracts §5.2.4/§5.2.5)
+## 8. Scenario engine, simulation replay, observed baseline (v4/§5.2.6, contracts §5.2.4–§5.2.6, §4.8)
 
-`POST /api/scenarios` replays two strategies over the observed window on
+`POST /api/scenarios` replays three strategies over the observed window on
 per-series fill-at-emptying rates (§5.2.3 [predicted]) under the same §4.6
 physics (flat 10-min legs — ordering is irrelevant, §4.4, so no solver
-runs here; deterministic):
+runs here; deterministic), with the **observed schedule** as the status-quo
+column beside them:
 
 | strategy | rule | emptyings | truck-days | cost total/year [predicted] | overflow share | simulated emptyings full/overfull | max fill |
 |---|---|---|---|---|---|---|---|
 | `fixed_frequency` | every `frequency_days` (28 [demo assumption, Q10]) | 15,636 | 852 | 426,000 / 244,126.07 EUR | 2.4 % | 14.4 % | 366.4 % |
 | `demand_driven` | predicted fill ≥ 80 % [demo assumption, §3.1] | 9,993 | 1,040 | 520,000 / 297,994.27 EUR | 0.0 % | 0.0 % | 80.0 % |
+| `day_spread` | due at ≥ 80 % projected fill, spread across days (§4.8 scheduler) | 9,237 | 342 | 171,000 / 97,994.27 EUR | 0.0 % | 0.0 % | 88.9 % |
+| `observed_baseline` | the observed schedule itself [observed × representative time model] | 11,701 visits | 523 | 261,500 / 273,488.54 EUR [predicted ×365/349] | — | 26.9 % [observed anchor] | 100.0 % [observed] |
 
 Observed anchor [observed]: 26.9 % of emptying records full/overfull, max
 numeric fill 100.0 % — reported with every simulated cost. **§6 rule: cost
 and service level are always reported together; a strategy that lowers cost
-while worsening service is flagged, never shown cost-alone.** The live run's
-honest result: `fixed_frequency` is cheaper (852 vs 1,040 truck-days) but
-overflows; `demand_driven` eliminates overflow (max fill exactly the 80 %
-trigger) yet **costs more** — its emptyings cluster onto shared peak days
-(rate-synchronised series come due together), so peak days need more trucks
-despite fewer total emptyings.
+while worsening service is flagged, never shown cost-alone.** The live
+run's honest results: `fixed_frequency` is cheaper than `demand_driven`
+(852 vs 1,040 truck-days) but overflows; `demand_driven` eliminates
+overflow (max fill exactly the 80 % trigger) yet **costs more** — its
+emptyings cluster onto shared peak days (rate-synchronised series come due
+together), so peak days need more trucks despite fewer total emptyings;
+`day_spread` keeps demand-driven timing but spreads due work across days,
+making it cheapest of the three **and** overflow-free — **−90,500 EUR
+(−34.6 %, derived) vs the observed baseline with better service**.
+Annualisation bases differ by contract (§5.2.6): strategy per-year figures
+use the 200 operating days × window ratio, the baseline's per-year figure
+is the ×365/349 calendar extrapolation [predicted] — compare same-window
+totals, never the per-year columns against each other.
+
+### 8.1 Observed-schedule baseline and truck estimate (§4.8, M17)
+
+The status quo is **not** a simulated cycle — it is the observed emptying
+history counted (`docs/schedule_profile.md`): 11,701 visits over 349 days,
+229 of them active (120 zero-visit days are never service days). Each
+active day is priced through the flat-mode time model: per-truck overhead
+means the day's truck count is the smallest integer `t` satisfying
+`visits × 5 min + (visits + 2t) × 10 min + t × 30 min ≤ t × 480 min`
+— with the §4.6 defaults this closes to **`t = ⌈15·visits/430⌉`**
+(deterministic arithmetic, no solver, no RNG). Result [observed ×
+representative time model]: **523 truck-days → 261,500 EUR** (× the
+[representative] 500 EUR/truck-day); **median 2 / peak 5 trucks** per
+active day — a range, never a claimed fleet size (the real fleet is
+unknown, Q1; the 3 × `demo_truck` solver input stays a separate labelled
+demo assumption); **0 capacity-infeasible days** (surfaced per §4.8, never
+coerced). Per-year: 273,488.54 EUR [predicted — ×365/349 extrapolation].
+
+### 8.2 Day-spreading scheduler (§4.8, M17)
+
+The plan strategy replays the §5.2.5 simulation core (rates §2.3; clock =
+latest record ≤ start; fill resets to 0 after each emptying) with these
+rules [predicted — simulation on observed rates]:
+
+- **Trigger**: a series is due on day d when projected fill (fill 0 + rate
+  × days since last emptying) ≥ `select_threshold_pct` (80 [demo
+  assumption §3.1]).
+- **Daily capacity**: `stops_per_truck_day = floor((480 − 2×10 − 30)/15)`
+  = **28** stops (shift minus depot/disposal legs, divided by service +
+  travel).
+- **Selection under capacity**: serve due series by projected fill
+  descending (ties: rate descending, then key — deterministic). Overflowing
+  capacity defers the least-urgent due series, **except** series whose
+  next-day projected fill would exceed 100 % — they are served the same day
+  and may raise that day's truck count. Overflow is never accepted;
+  deferrals are counted and surfaced (29,401 deferrals, longest wait 29
+  days), never silent drops.
+- **Counting**: `trucks_used(d) = ceil(stops_served(d)/28)`; truck-days =
+  Σ over days; cost = truck-days × [representative] rate. Planning staffing
+  is unbounded (per-truck-day cost model); the 3 × `demo_truck` demo cap
+  does not apply here.
+
+Live result (2026-11-15): 9,237 stops, **342 truck-days → 171,000 EUR**,
+peak 1 truck/day, typical 1.0, overflow 0.0 %, max fill 88.9 % — the
+money story of slide 5. Pure function of dataset + config (no solver, no
+RNG); the baseline column is the same arithmetic applied to the observed
+schedule.
 
 `POST /api/simulation` returns the daily replay for the timeline visual
 (basis: records observed, rates derived, plan simulated). **Replay
