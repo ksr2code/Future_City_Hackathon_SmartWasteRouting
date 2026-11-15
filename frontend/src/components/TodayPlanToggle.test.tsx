@@ -21,84 +21,73 @@ function stubScenarios(payload: unknown, status = 200): Mock {
   return fetchMock;
 }
 
-/** Inverted tradeoff: plan cheaper BUT service worse (§6 warning case). */
-const cheaperButWorse: ScenarioResponse = {
-  ...scenariosFixture,
-  strategies: [
-    scenariosFixture.strategies[0],
-    {
-      ...scenariosFixture.strategies[1],
-      cost_eur_total: 300000,
-      cost_eur_per_year: 172023.35,
-      service: {
-        basis: "simulated",
-        overflow_share_pct: 5.0,
-        share_emptyings_full_or_overfull_pct: 22.0,
-        max_fill_pct: 420.0,
+/** Tradeoff-matrix variants now target day_spread (§5.2.6: the Overview plan
+ *  side is OUR plan = demand-driven + day spreading, never the naive
+ *  demand_driven "trap" — that stays ScenariosPanel-only). Each variant
+ *  overrides the day_spread entry; fixed_frequency (today) is untouched. */
+function withDaySpread(patch: Partial<(typeof scenariosFixture)["strategies"][number]>): ScenarioResponse {
+  return {
+    ...scenariosFixture,
+    strategies: [
+      ...scenariosFixture.strategies.filter((s) => s.id !== "day_spread"),
+      {
+        ...scenariosFixture.strategies.find((s) => s.id === "day_spread")!,
+        ...patch,
       },
-    },
-  ],
-};
+    ],
+  };
+}
+
+/** Inverted tradeoff: plan cheaper BUT service worse (§6 warning case). */
+const cheaperButWorse: ScenarioResponse = withDaySpread({
+  cost_eur_total: 300000,
+  cost_eur_per_year: 172023.35,
+  service: {
+    basis: "simulated",
+    overflow_share_pct: 5.0,
+    share_emptyings_full_or_overfull_pct: 22.0,
+    max_fill_pct: 420.0,
+  },
+});
 
 /** Cost more, service EQUAL (delta 0) — must use the no-gain wording, not
  * gain language (review minor #4). Plan share = today's 14.4. */
-const costMoreNoGain: ScenarioResponse = {
-  ...scenariosFixture,
-  strategies: [
-    scenariosFixture.strategies[0],
-    {
-      ...scenariosFixture.strategies[1],
-      cost_eur_total: 700000,
-      cost_eur_per_year: 400000,
-      service: {
-        basis: "simulated",
-        overflow_share_pct: 2.4,
-        share_emptyings_full_or_overfull_pct: 14.4,
-        max_fill_pct: 300.0,
-      },
-    },
-  ],
-};
+const costMoreNoGain: ScenarioResponse = withDaySpread({
+  cost_eur_total: 700000,
+  cost_eur_per_year: 400000,
+  service: {
+    basis: "simulated",
+    overflow_share_pct: 2.4,
+    share_emptyings_full_or_overfull_pct: 14.4,
+    max_fill_pct: 300.0,
+  },
+});
 
 /** Worst case: costs MORE and service WORSE (share 20.0 vs 14.4 → sd +5.6)
  * — red "dominated on both" wording (adjudication matrix case 1). */
-const costMoreServiceWorse: ScenarioResponse = {
-  ...scenariosFixture,
-  strategies: [
-    scenariosFixture.strategies[0],
-    {
-      ...scenariosFixture.strategies[1],
-      cost_eur_total: 700000,
-      cost_eur_per_year: 400000,
-      service: {
-        basis: "simulated",
-        overflow_share_pct: 9.0,
-        share_emptyings_full_or_overfull_pct: 20.0,
-        max_fill_pct: 300.0,
-      },
-    },
-  ],
-};
+const costMoreServiceWorse: ScenarioResponse = withDaySpread({
+  cost_eur_total: 700000,
+  cost_eur_per_year: 400000,
+  service: {
+    basis: "simulated",
+    overflow_share_pct: 9.0,
+    share_emptyings_full_or_overfull_pct: 20.0,
+    max_fill_pct: 300.0,
+  },
+});
 
 /** Costs LESS, service UNCHANGED (share 14.4 → sd 0; cost 200,000 →
  * delta −44,126 EUR/year) — emerald "unchanged" wording (matrix case 5). */
-const costLessNoChange: ScenarioResponse = {
-  ...scenariosFixture,
-  strategies: [
-    scenariosFixture.strategies[0],
-    {
-      ...scenariosFixture.strategies[1],
-      cost_eur_total: 200000,
-      cost_eur_per_year: 200000,
-      service: {
-        basis: "simulated",
-        overflow_share_pct: 2.4,
-        share_emptyings_full_or_overfull_pct: 14.4,
-        max_fill_pct: 300.0,
-      },
-    },
-  ],
-};
+const costLessNoChange: ScenarioResponse = withDaySpread({
+  cost_eur_total: 200000,
+  cost_eur_per_year: 200000,
+  service: {
+    basis: "simulated",
+    overflow_share_pct: 2.4,
+    share_emptyings_full_or_overfull_pct: 14.4,
+    max_fill_pct: 300.0,
+  },
+});
 
 describe("TodayPlanToggle — cost + service together (§6)", () => {
   it("renders the observed anchor and the today block with service beside cost; POSTs server defaults", async () => {
@@ -125,9 +114,12 @@ describe("TodayPlanToggle — cost + service together (§6)", () => {
     expect(today).toContain("2.4 %"); // overflow share
     expect(today).toContain("366.4 %"); // max fill
     expect(today).toContain("simulation based on historical rates");
+    // §5.2.6: the plan button is OUR plan (own key; naive wording untouched
+    // for the ScenariosPanel trap card).
+    expect(document.body.textContent).toContain("Our plan: demand-driven + day spreading");
   });
 
-  it("plan side shows demand_driven costing MORE, shown straight, with both deltas", async () => {
+  it("plan side shows OUR plan (day_spread) costing LESS with better service, shown straight", async () => {
     stubScenarios(scenariosFixture);
     render(<TodayPlanToggle lang="en" datasetVersion={0} />);
     await flush();
@@ -135,16 +127,24 @@ describe("TodayPlanToggle — cost + service together (§6)", () => {
 
     await click(document.querySelector('[data-testid="toggle-plan"]'));
 
+    // §5.2.6 day_spread fixture numbers (live capture), never hardcoded.
     const plan = document.querySelector('[data-testid="toggle-strategy-plan"]')?.textContent ?? "";
-    expect(plan).toContain("520,000 EUR");
-    expect(plan).toContain("297,994 EUR/year");
-    expect(plan).toContain("0.0 %"); // overflow 0.0
+    expect(plan).toContain("171,000 EUR"); // cost_eur_total
+    expect(plan).toContain("97,994 EUR/year"); // cost_eur_per_year (rounded)
+    expect(plan).toContain("0.0 %"); // overflow 0.0 AND full-or-overfull share 0.0
+    expect(plan).toContain("88.9 %"); // max simulated fill
+    expect(plan).toContain("342"); // truck_days
+    expect(plan).toContain("9,237"); // stops_total
+    // Optional day_spread extra, graceful when absent (§5.2.6).
+    expect(plan).toContain("Peak trucks per day");
+    expect(plan).toContain("1"); // peak_trucks_per_day
 
+    // Derived deltas: 97,994.27 − 244,126.07 = −146,132 EUR/year;
+    // service delta 0.0 − 14.4 = −14.4 pp → emerald cost-less-better branch.
     const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
-    expect(tradeoff).toContain("costs MORE"); // straight wording, not spun
-    // Derived delta: 297,994.27 − 244,126.07 = +53,868 EUR/year.
-    expect(tradeoff).toContain("+53,868 EUR/year");
-    // Service delta: 0.0 − 14.4 = −14.4 pp (improvement).
+    expect(tradeoff).toContain("costs LESS");
+    expect(tradeoff).toContain("−146,132 EUR/year");
+    expect(tradeoff).toContain("improves");
     expect(tradeoff).toContain("−14.4 pp");
   });
 
@@ -221,9 +221,61 @@ describe("TodayPlanToggle — cost + service together (§6)", () => {
     expect(text).toContain("Heute vs. mit unserem Plan");
     expect(text).toContain("Leerungsdaten voll oder übervoll");
     expect(text).toContain("26.9 %");
+    // §5.2.6 plan button reuses the exact day_spread display phrasing
+    // (vocabulary parity with the ScenariosPanel spread card) via its own
+    // `overview.toggle.ourPlan` key — the naive `overview.toggle.plan`
+    // wording stays ScenariosPanel-only.
+    expect(text).toContain("Unser Plan: bedarfsorientiert + Tagesverteilung");
     await click(document.querySelector('[data-testid="toggle-plan"]'));
     const tradeoff = document.querySelector('[data-testid="toggle-tradeoff"]')?.textContent ?? "";
-    expect(tradeoff).toContain("MEHR");
+    expect(tradeoff).toContain("WENIGER");
+    expect(tradeoff).toContain("verbessert sich");
+  });
+
+  it("guard: a payload WITHOUT day_spread degrades to the error state in standalone mode", async () => {
+    // Naive-only payload (no §5.2.6 day_spread) — must never render a plan
+    // block, never crash, and surface an explicit error (§5.3).
+    stubScenarios({
+      ...scenariosFixture,
+      strategies: scenariosFixture.strategies.filter((s) => s.id !== "day_spread"),
+    });
+    render(<TodayPlanToggle lang="en" datasetVersion={0} />);
+    await flush();
+    await flush();
+
+    expect(document.querySelector('[data-testid="error-state"]')?.textContent).toContain(
+      "Could not compute the today-vs-plan comparison",
+    );
+    expect(document.querySelector('[data-testid="toggle-strategy-plan"]')).toBeNull();
+  });
+
+  it("guard: shared payload WITHOUT day_spread renders no strategy block (never crashes)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(scenariosFixture as object, 200)),
+    );
+    render(
+      <TodayPlanToggle
+        lang="en"
+        datasetVersion={0}
+        shared={{
+          payload: {
+            ...scenariosFixture,
+            strategies: scenariosFixture.strategies.filter((s) => s.id !== "day_spread"),
+          },
+          loading: false,
+          error: null,
+          notFound: false,
+        }}
+      />,
+    );
+    await flush();
+    await flush();
+
+    // No fetch (shared mode); the strategy area is hidden, no crash.
+    expect(document.querySelector('[data-testid="toggle-strategy-plan"]')).toBeNull();
+    expect(document.querySelector('[data-testid="toggle-strategy-today"]')).toBeNull();
+    expect(document.querySelector('[data-testid="today-plan-toggle"]')).not.toBeNull();
   });
 });
 

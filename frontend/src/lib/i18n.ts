@@ -122,6 +122,10 @@ const en = {
     "Cost is always shown with its service level — the plan that costs less is not automatically better (§6).",
   "overview.toggle.today": "Modelled 28-day cycle [demo assumption]",
   "overview.toggle.plan": "Demand-driven, same-day (no spacing)",
+  // NOTE: `overview.toggle.plan` is still consumed as the ScenariosPanel
+  // naive demand-driven card title (trap narrative — do NOT repurpose it).
+  // The TodayPlanToggle button uses `overview.toggle.ourPlan` instead.
+  "overview.toggle.ourPlan": "Our plan: demand-driven + day spreading",
   "overview.toggle.costWindow": "over the replayed window",
   "overview.toggle.costYear": "Pro-rated cost per year",
   "overview.toggle.serviceFull": "Simulated emptying events full-or-overfull",
@@ -475,6 +479,10 @@ const de: Record<TranslationKey, string> = {
     "Kosten werden immer zusammen mit dem Serviceniveau gezeigt — billiger heißt nicht automatisch besser (§6).",
   "overview.toggle.today": "Modellierter 28-Tage-Zyklus [Demo-Annahme]",
   "overview.toggle.plan": "Bedarfsorientiert, gleicher Tag (ohne Staffelung)",
+  // NOTE: `overview.toggle.plan` is still consumed as the ScenariosPanel
+  // naive demand-driven card title (trap narrative — do NOT repurpose it).
+  // The TodayPlanToggle button uses `overview.toggle.ourPlan` instead.
+  "overview.toggle.ourPlan": "Unser Plan: bedarfsorientiert + Tagesverteilung",
   "overview.toggle.costWindow": "über den gespielten Zeitraum",
   "overview.toggle.costYear": "Hochgerechnete Kosten pro Jahr",
   "overview.toggle.serviceFull": "Simulierte Leerungs-Ereignisse voll oder übervoll",

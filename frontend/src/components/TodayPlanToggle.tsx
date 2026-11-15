@@ -58,13 +58,15 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 /** Defensive §5.2.4 payload guard — malformed responses degrade, never crash.
- *  §5.2.6: the strategies array is additive (day_spread joined); require the
- *  two ids this component renders, tolerate extra rows. */
+ *  §5.2.6: the strategies array is additive (demand_driven joins); require the
+ *  two ids this component renders — fixed_frequency (today) and day_spread
+ *  (our plan, §5.2.6) — tolerate extra rows (naive demand_driven stays a
+ *  ScenariosPanel-only "trap" narrative, never the Overview plan side). */
 function validScenarios(payload: ScenarioResponse | null): ScenarioResponse | null {
   if (payload === null) return null;
   if (!Array.isArray(payload.strategies) || payload.strategies.length < 2) return null;
   if (strategyById(payload, "fixed_frequency") === null) return null;
-  if (strategyById(payload, "demand_driven") === null) return null;
+  if (strategyById(payload, "day_spread") === null) return null;
   const anchor = payload.observed_anchor;
   if (anchor === null || anchor === undefined || anchor.basis !== "observed_emptying_records") {
     return null;
@@ -137,6 +139,16 @@ function StrategyBlock({
             {strategy.stops_total.toLocaleString("en-US")}
           </dd>
         </div>
+        {/* §5.2.6 day_spread extras — optional, shown only when present
+            (day_spread only; fixed_frequency rows render without them). */}
+        {isFiniteNumber(strategy.peak_trucks_per_day) ? (
+          <div className="flex justify-between gap-2">
+            <dt>{t(lang, "scenarios.spread.peakTrucks")}</dt>
+            <dd className="font-semibold text-slate-800">
+              {strategy.peak_trucks_per_day.toLocaleString("en-US")}
+            </dd>
+          </div>
+        ) : null}
       </dl>
       <p className="mt-1 text-xs text-slate-500">{t(lang, "overview.toggle.simBasis")}</p>
     </div>
@@ -198,7 +210,10 @@ export function TodayPlanToggle({
   const scenariosNotFound = shared !== undefined ? shared.notFound : notFound;
 
   const today = strategyById(scenarios, "fixed_frequency");
-  const plan = strategyById(scenarios, "demand_driven");
+  // §5.2.6 (user decision 2026-11-15): the Overview plan side is OUR plan —
+  // demand-driven + day spreading — never the naive demand_driven strategy
+  // (that clustering "trap" stays in the ScenariosPanel narrative only).
+  const plan = strategyById(scenarios, "day_spread");
   const anchorPct =
     scenarios !== null && isFiniteNumber(scenarios.observed_anchor.share_full_or_overfull_pct)
       ? `${scenarios.observed_anchor.share_full_or_overfull_pct.toFixed(1)} %`
@@ -276,7 +291,9 @@ export function TodayPlanToggle({
       </div>
       <div className="mt-2 flex gap-2" role="group" aria-label={t(lang, "overview.toggle.title")}>
         {toggleButton("today", "overview.toggle.today", "toggle-today")}
-        {toggleButton("plan", "overview.toggle.plan", "toggle-plan")}
+        {/* §5.2.6: dedicated key — `overview.toggle.plan` stays the naive
+            demand-driven wording (ScenariosPanel trap card title). */}
+        {toggleButton("plan", "overview.toggle.ourPlan", "toggle-plan")}
       </div>
 
       {scenariosLoading ? (
